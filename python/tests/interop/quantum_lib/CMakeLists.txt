@@ -11,4 +11,4 @@ set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> -fPIC --enable-mlir --disable
 
 # FIXME Error with SHARED, it pulls in all the mlir libraries anyway
 add_library(quantum_lib OBJECT quantum_lib.cpp)
-add_dependencies(quantum_lib nvq++ cudaq-opt cudaq-quake cudaq-translate)
+add_dependencies(quantum_lib nvq++ cudaq-opt cudaq-quake cudaq-translate cudaq-target-conf)
