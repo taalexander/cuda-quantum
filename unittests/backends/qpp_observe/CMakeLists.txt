@@ -24,7 +24,7 @@ target_link_libraries(nvqir-qpp-observe-test
 
 add_executable(test_observe_backend QppObserveTester.cpp)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)
-  target_link_options(test_observe_backend PRIVATE -Wl,--no-as-needed)
+  target_link_options(test_observe_backend PRIVATE ${CUDAQ_FORCE_LINK_FLAG})
 endif()
 target_compile_definitions(test_observe_backend PRIVATE -DNVQIR_BACKEND_NAME=qpp_observe)
 target_include_directories(test_observe_backend PRIVATE ../..)
