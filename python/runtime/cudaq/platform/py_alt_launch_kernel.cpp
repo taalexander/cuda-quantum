@@ -866,7 +866,13 @@ MlirModule synthesizeKernel(const std::string &name, MlirModule module,
   registerLLVMDialectTranslation(*context);
 
   // Get additional debug values
+  // On macOS, MLIR threading is disabled by default to avoid crashes in
+  // LLVM's ThreadPool when LLVM is built as a shared library (dylib).
+#if defined(__APPLE__)
+  auto disableMLIRthreading = getEnvBool("CUDAQ_MLIR_DISABLE_THREADING", true);
+#else
   auto disableMLIRthreading = getEnvBool("CUDAQ_MLIR_DISABLE_THREADING", false);
+#endif
   auto enablePrintMLIREachPass =
       getEnvBool("CUDAQ_MLIR_PRINT_EACH_PASS", false);
 
@@ -1007,7 +1013,13 @@ std::string getASM(const std::string &name, MlirModule module,
   auto context = cloned.getContext();
 
   // Get additional debug values
+  // On macOS, MLIR threading is disabled by default to avoid crashes in
+  // LLVM's ThreadPool when LLVM is built as a shared library (dylib).
+#if defined(__APPLE__)
+  auto disableMLIRthreading = getEnvBool("CUDAQ_MLIR_DISABLE_THREADING", true);
+#else
   auto disableMLIRthreading = getEnvBool("CUDAQ_MLIR_DISABLE_THREADING", false);
+#endif
   auto enablePrintMLIREachPass =
       getEnvBool("CUDAQ_MLIR_PRINT_EACH_PASS", false);
 
