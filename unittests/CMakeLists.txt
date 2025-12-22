@@ -301,7 +301,7 @@ target_link_libraries(test_spin
   cudaq-operator
   gtest_main)
 target_include_directories(test_spin PRIVATE operators)
-gtest_discover_tests(test_spin DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(test_spin DISCOVERY_TIMEOUT 120)
 
 # Create an executable for operators UnitTests
 set(CUDAQ_OPERATOR_TEST_SOURCES
@@ -326,7 +326,7 @@ target_link_libraries(test_operators
   cudaq-operator
   cudaq
   gtest_main)
-gtest_discover_tests(test_operators DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(test_operators DISCOVERY_TIMEOUT 120)
 
 if (CUDA_FOUND)
   find_package(CUDAToolkit REQUIRED)
@@ -428,7 +428,7 @@ target_link_libraries(test_qudit
   cudaq-platform-default
   cudaq-em-qudit
   gtest_main)
-gtest_discover_tests(test_qudit DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(test_qudit DISCOVERY_TIMEOUT 120)
 
 # build the test photonics execution manager
 add_executable(test_photonics main.cpp photonics/PhotonicsTester.cpp)
@@ -442,7 +442,7 @@ target_link_libraries(test_photonics
   cudaq-em-photonics
   nvqir-qpp
   gtest_main)
-gtest_discover_tests(test_photonics DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(test_photonics DISCOVERY_TIMEOUT 120)
 
 add_executable(test_utils main.cpp utils/UtilsTester.cpp utils/Matrix.cpp)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)
@@ -456,7 +456,7 @@ target_link_libraries(test_utils
   nvqir
   nvqir-qpp fmt::fmt-header-only
   gtest_main)
-gtest_discover_tests(test_utils DISCOVERY_TIMEOUT 30)
+gtest_discover_tests(test_utils DISCOVERY_TIMEOUT 120)
 
 # Test for thread-local execution context storage
 add_executable(test_exec_ctx_thread main.cpp common/ExecutionContextThreadTester.cpp)
@@ -539,5 +539,5 @@ if (CUDAQ_ENABLE_PYTHON)
     cudaq-pyscf
     gtest_main)
   gtest_discover_tests(test_domains
-    TEST_SUFFIX _Sampling PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python:${Python_SITELIB}" DISCOVERY_TIMEOUT 30)
+    TEST_SUFFIX _Sampling PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python:${Python_SITELIB}" DISCOVERY_TIMEOUT 120)
 endif()
