@@ -35,9 +35,9 @@ target_include_directories(test_quantinuum_util
   ../.. 
   ${CMAKE_SOURCE_DIR}/runtime/cudaq/platform/default/rest/helpers/quantinuum)
 target_link_libraries(test_quantinuum_util
-  PRIVATE 
+  PRIVATE
   cudaq
-  cudaq-common 
+  cudaq-common
   cudaq-operator
   gtest_main)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)

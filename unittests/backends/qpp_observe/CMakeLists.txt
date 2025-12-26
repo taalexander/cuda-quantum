@@ -29,13 +29,13 @@ endif()
 target_compile_definitions(test_observe_backend PRIVATE -DNVQIR_BACKEND_NAME=qpp_observe)
 target_include_directories(test_observe_backend PRIVATE ../..)
 target_link_libraries(test_observe_backend
-  PRIVATE fmt::fmt-header-only 
-  cudaq-common 
+  PRIVATE fmt::fmt-header-only
+  cudaq-common
   cudaq
-  nvqir 
+  nvqir
   nvqir-qpp-observe-test
   cudaq-operator
-  cudaq-platform-default 
+  cudaq-platform-default
   cudaq-em-default
   gtest_main)
 gtest_discover_tests(test_observe_backend DISCOVERY_TIMEOUT 120)
