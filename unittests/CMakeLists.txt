@@ -427,6 +427,7 @@ target_link_libraries(test_qudit
   cudaq
   cudaq-platform-default
   cudaq-em-qudit
+  nvqir-qpp
   gtest_main)
 gtest_discover_tests(test_qudit DISCOVERY_TIMEOUT 120)
 

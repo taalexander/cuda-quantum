@@ -11,8 +11,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ctad-maybe-unsupported")
 set(INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
 # Create the CUDA-Q Library
-add_library(${LIBRARY_NAME} 
-         SHARED cudaq.cpp 
+add_library(${LIBRARY_NAME}
+         SHARED cudaq.cpp
                 target_control.cpp
                 algorithms/draw.cpp
                 algorithms/evolve.cpp
