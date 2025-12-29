@@ -39,6 +39,16 @@ declare_mlir_dialect_python_bindings(
     dialects/cc.py
   DIALECT_NAME cc)
 
+# Get MLIR libraries with dylib substitution for the Python extension.
+cudaq_get_mlir_libs(PYTHON_MLIR_LIBS
+  OptCodeGen
+  OptTransforms
+  MLIRPass
+  CUDAQTargetConfigUtil
+  cudaq-python-interop
+  LLVMCodeGen
+)
+
 declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
   MODULE_NAME _quakeDialects
   ADD_TO_PARENT CUDAQuantumPythonSources
@@ -68,7 +78,7 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
     ../runtime/cudaq/platform/py_alt_launch_kernel.cpp
     ../runtime/cudaq/qis/py_execution_manager.cpp
     ../runtime/cudaq/qis/py_qubit_qis.cpp
-    ../runtime/cudaq/operators/py_helpers.cpp  
+    ../runtime/cudaq/operators/py_helpers.cpp
     ../runtime/cudaq/operators/py_matrix.cpp
     ../runtime/cudaq/operators/py_scalar_op.cpp
     ../runtime/cudaq/operators/py_spin_op.cpp
@@ -102,12 +112,7 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
    CUDAQuantumMLIRCAPI
    MLIRCAPIExecutionEngine
   PRIVATE_LINK_LIBS
-   OptCodeGen
-   OptTransforms
-   MLIRPass
-   CUDAQTargetConfigUtil
-   cudaq-python-interop
-   LLVMCodeGen
+   ${PYTHON_MLIR_LIBS}
 )
 
 target_include_directories(CUDAQuantumPythonSources.Extension INTERFACE 
@@ -141,8 +146,8 @@ add_mlir_python_common_capi_library(CUDAQuantumPythonCAPI
     MLIRPythonSources.Core
 )
 
-# On macOS, force-load LLVMCodeGen to ensure static initializers run and register
-# LLVM command-line options (e.g., -fast-isel).
+# On macOS, force-load LLVMCodeGen to ensure static initializers run
+# and register LLVM command-line options (e.g., -fast-isel).
 if(APPLE)
   target_link_options(CUDAQuantumPythonCAPI PRIVATE
     "-Wl,-force_load,$<TARGET_FILE:LLVMCodeGen>")
