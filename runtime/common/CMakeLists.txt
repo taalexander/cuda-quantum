@@ -165,4 +165,6 @@ target_link_libraries(cudaq-mlir-runtime
 # they should link against this library instead.
 add_lib_loading_macos_workaround(cudaq-mlir-runtime TRUE)
 
+add_lib_loading_macos_workaround(cudaq-mlir-runtime TRUE)
+
 install(TARGETS cudaq-mlir-runtime DESTINATION lib)
