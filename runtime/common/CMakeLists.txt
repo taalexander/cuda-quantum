@@ -119,6 +119,9 @@ set_source_files_properties(
 )
 
 target_include_directories(cudaq-mlir-runtime
+  PUBLIC
+    $<BUILD_INTERFACE:${LLVM_INCLUDE_DIRS}>
+    $<BUILD_INTERFACE:${MLIR_INCLUDE_DIRS}>
   PRIVATE .
     ${CMAKE_SOURCE_DIR}/tpls/spdlog/include
     ${CMAKE_SOURCE_DIR}/tpls/fmt/include
@@ -127,6 +130,7 @@ target_include_directories(cudaq-mlir-runtime
 target_link_libraries(cudaq-mlir-runtime
   PUBLIC
     nvqir
+  PRIVATE
     CCDialect
     QuakeDialect
     OptCodeGen
@@ -143,7 +147,6 @@ target_link_libraries(cudaq-mlir-runtime
     MLIRLLVMCommonConversion
     MLIRLLVMToLLVMIRTranslation
     LLVMCodeGen
-  PRIVATE
     cudaq
     spdlog::spdlog
 )
