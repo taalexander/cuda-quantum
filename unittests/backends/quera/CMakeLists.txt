@@ -19,4 +19,4 @@ target_link_libraries(test_quera PRIVATE
     gtest_main
 )
 
-gtest_discover_tests(test_quera)
+gtest_discover_tests(test_quera DISCOVERY_TIMEOUT 120)

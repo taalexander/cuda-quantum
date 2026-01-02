@@ -22,4 +22,4 @@ target_link_libraries(test_pasqal
     gtest_main
 )
 
-gtest_discover_tests(test_pasqal)
+gtest_discover_tests(test_pasqal DISCOVERY_TIMEOUT 120)

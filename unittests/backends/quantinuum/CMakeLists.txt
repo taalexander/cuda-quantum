@@ -43,4 +43,4 @@ target_link_libraries(test_quantinuum_util
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)
   target_link_options(test_quantinuum_util PRIVATE ${CUDAQ_FORCE_LINK_FLAG})
 endif()
-gtest_discover_tests(test_quantinuum_util)
+gtest_discover_tests(test_quantinuum_util DISCOVERY_TIMEOUT 120)
