@@ -38,4 +38,4 @@ target_link_libraries(test_observe_backend
   cudaq-platform-default 
   cudaq-em-default
   gtest_main)
-gtest_discover_tests(test_observe_backend)
+gtest_discover_tests(test_observe_backend DISCOVERY_TIMEOUT 120)
