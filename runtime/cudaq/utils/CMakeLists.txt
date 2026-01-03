@@ -6,29 +6,17 @@
 # the terms of the Apache License 2.0 which accompanies this distribution.     #
 # ============================================================================ #
 
-set(LIBRARY_NAME cudaq-operator)
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ctad-maybe-unsupported")
-set(INTERFACE_POSITION_INDEPENDENT_CODE ON)
+# Low-level utilities library.
+# This library has no dependencies on other cudaq libraries, allowing both
+# cudaq-operator and libcudaq to depend on it without circular dependencies.
 
-set(CUDAQ_OPS_SRC
-  callback.cpp
-  scalar_op.cpp
-  spin_op.cpp
-  boson_op.cpp
-  fermion_op.cpp
-  matrix_op.cpp
-  product_op.cpp
-  sum_op.cpp
-  rydberg_hamiltonian.cpp
-  evaluation.cpp
-  handler.cpp
-  helpers.cpp
-  super_op.cpp
+set(LIBRARY_NAME cudaq-utils)
+
+add_library(${LIBRARY_NAME} SHARED
+  matrix.cpp
+  cudaq_utils.cpp
 )
-
-add_library(${LIBRARY_NAME} SHARED ${CUDAQ_OPS_SRC})
 set_property(GLOBAL APPEND PROPERTY CUDAQ_RUNTIME_LIBS ${LIBRARY_NAME})
-target_compile_definitions(${LIBRARY_NAME} PRIVATE -DCUDAQ_INSTANTIATE_TEMPLATES)
 
 target_include_directories(${LIBRARY_NAME}
     PUBLIC
@@ -37,17 +25,10 @@ target_include_directories(${LIBRARY_NAME}
        $<INSTALL_INTERFACE:include>
     PRIVATE .)
 
-set (OPERATOR_DEPENDENCIES "")
-list(APPEND OPERATOR_DEPENDENCIES fmt::fmt-header-only)
-add_openmp_configurations(${LIBRARY_NAME} OPERATOR_DEPENDENCIES)
+install(TARGETS ${LIBRARY_NAME} EXPORT cudaq-utils-targets DESTINATION lib)
 
-target_link_libraries(${LIBRARY_NAME}
-  PUBLIC cudaq-utils
-  PRIVATE ${OPERATOR_DEPENDENCIES})
-
-install(TARGETS ${LIBRARY_NAME} EXPORT cudaq-operator-targets DESTINATION lib)
-
-install(EXPORT cudaq-operator-targets
-        FILE CUDAQOperatorTargets.cmake
+install(EXPORT cudaq-utils-targets
+        FILE CUDAQUtilsTargets.cmake
         NAMESPACE cudaq::
         DESTINATION lib/cmake/cudaq)
+

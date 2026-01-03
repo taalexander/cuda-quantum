@@ -140,6 +140,7 @@ add_mlir_python_common_capi_library(CUDAQuantumPythonCAPI
     MLIRPythonSources.Core
 )
 
+# macOS: Force-load LLVM target libraries to ensure static initializers run.
 add_lib_loading_macos_workaround(CUDAQuantumPythonCAPI TRUE)
 
 ################################################################################
@@ -179,4 +180,5 @@ endif()
 
 
 
+# macOS: Force-load LLVM target libraries to ensure static initializers run
 add_lib_loading_macos_workaround(CUDAQuantumPythonModules.extension._quakeDialects.dso TRUE)

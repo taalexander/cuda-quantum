@@ -23,7 +23,6 @@ add_library(${LIBRARY_NAME}
                 qis/execution_manager.cpp
                 qis/remote_state.cpp
                 qis/state.cpp
-                utils/cudaq_utils.cpp
                 distributed/mpi_plugin.cpp)
 
 set_property(GLOBAL APPEND PROPERTY CUDAQ_RUNTIME_LIBS ${LIBRARY_NAME})
@@ -58,6 +57,7 @@ endif()
 
 add_lib_loading_macos_workaround(${LIBRARY_NAME} TRUE)
 
+add_subdirectory(utils)
 add_subdirectory(qis/managers)
 add_subdirectory(algorithms)
 add_subdirectory(platform)
