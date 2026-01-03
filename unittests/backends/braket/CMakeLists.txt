@@ -28,7 +28,6 @@ target_link_libraries(test_braket
 # the ServerHelper registration runs. The linker would otherwise strip
 # the registration code from cudaq-rest-qpu since no symbols are directly referenced.
 if (APPLE)
-  target_link_directories(test_braket PRIVATE "${CMAKE_BINARY_DIR}/lib")
   target_link_libraries(test_braket PRIVATE cudaq-serverhelper-braket)
 endif()
 
