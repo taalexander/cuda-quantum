@@ -124,7 +124,8 @@ if $install_prereqs || [ -n "$install_toolchain" ]; then
   source "$this_file_dir/set_env_defaults.sh"
   
   echo "Installing prerequisites..."
-  prereq_args=""
+  # Save and clear positional parameters to avoid passing them to sourced script
+  saved_args=("$@")
   if [ -n "$install_toolchain" ]; then
     set -- -t "$install_toolchain"
   else

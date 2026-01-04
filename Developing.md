@@ -162,6 +162,7 @@ The script is idempotent and skips already-installed prerequisites on subsequent
 | `-a <dir>` | External simulator assets directory (default: `assets`) |
 | `-p` | Install prerequisites before building |
 | `-T <toolchain>` | Install prerequisites with toolchain (e.g., `gcc12`, `llvm`), implies `-p` |
+| `-i` | Incremental build (reuse existing artifacts) |
 | `-t` | Run validation tests after build |
 | `-q` | Quick test mode (core tests only, implies `-t`) |
 | `-v` | Verbose output |

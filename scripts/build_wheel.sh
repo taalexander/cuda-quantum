@@ -23,6 +23,7 @@
 #   -q: Quick test mode (only run core tests, implies -t)
 #   -p: Install prerequisites before building
 #   -T <toolchain>: Toolchain to use with prerequisites (e.g., gcc12, llvm)
+#   -i: Incremental build (reuse existing build artifacts)
 #   -v: Verbose output
 #
 # Environment variables:
@@ -50,12 +51,13 @@ run_tests=false
 quick_test=false
 install_prereqs=false
 install_toolchain=""
+incremental=false
 verbose=false
 
 # Parse command line arguments
 __optind__=$OPTIND
 OPTIND=1
-while getopts ":c:o:a:tqpT:v" opt; do
+while getopts ":c:o:a:tqpT:iv" opt; do
   case $opt in
     c) cuda_variant="$OPTARG"
     ;;
@@ -71,6 +73,8 @@ while getopts ":c:o:a:tqpT:v" opt; do
     ;;
     T) install_prereqs=true; install_toolchain="$OPTARG"
     ;;
+    i) incremental=true
+    ;;
     v) verbose=true
     ;;
     \?) echo "Invalid command line option -$OPTARG" >&2
@@ -80,6 +84,11 @@ while getopts ":c:o:a:tqpT:v" opt; do
 done
 OPTIND=$__optind__
 
+if $verbose; then
+  echo "Verbose mode enabled"
+  echo "Platform: $platform ($arch)"
+fi
+
 # Install prerequisites (opt-in with -p or -T)
 # When installing prerequisites, we also set default install prefix env vars
 # so CMake knows where to find them. Without -p/-T, CMake uses standard discovery.
@@ -88,15 +97,20 @@ if $install_prereqs; then
   source "$this_file_dir/set_env_defaults.sh"
   
   echo "Installing prerequisites..."
-  prereq_args=""
+  # Save and clear positional parameters to avoid passing them to sourced script
+  saved_args=("$@")
   if [ -n "$install_toolchain" ]; then
-    prereq_args="-t $install_toolchain"
+    set -- -t "$install_toolchain"
+  else
+    set --
   fi
   if $verbose; then
-    source "$this_file_dir/install_prerequisites.sh" $prereq_args
+    source "$this_file_dir/install_prerequisites.sh" "$@"
   else
-    source "$this_file_dir/install_prerequisites.sh" $prereq_args 2>&1 | tail -5
+    source "$this_file_dir/install_prerequisites.sh" "$@" 2>&1 | tail -5
   fi
+  # Restore positional parameters
+  set -- "${saved_args[@]}"
   if [ $? -ne 0 ]; then
     echo "Error: Failed to install prerequisites" >&2
     exit 1
@@ -172,14 +186,25 @@ if [ "$platform" != "Darwin" ]; then
   fi
 fi
 
-# Clean previous build artifacts
-rm -rf _skbuild dist/*.whl "$output_dir"/*.whl 2>/dev/null || true
+# Clean previous build artifacts (unless incremental)
+if $incremental; then
+  echo "Incremental build: reusing existing build artifacts"
+  rm -rf dist/*.whl "$output_dir"/*.whl 2>/dev/null || true
+else
+  rm -rf _skbuild dist/*.whl "$output_dir"/*.whl 2>/dev/null || true
+fi
 mkdir -p "$output_dir"
 
 # Build the wheel
 echo "Building wheel..."
 if $verbose; then
-  $python -m build --wheel
+  echo "  Command: $python -m build --wheel"
+  echo "  SETUPTOOLS_SCM_PRETEND_VERSION=$SETUPTOOLS_SCM_PRETEND_VERSION"
+  if [ -n "$CUDAQ_EXTERNAL_NVQIR_SIMS" ]; then
+    echo "  CUDAQ_EXTERNAL_NVQIR_SIMS=$CUDAQ_EXTERNAL_NVQIR_SIMS"
+  fi
+  echo ""
+  $python -m build --wheel -v
 else
   $python -m build --wheel 2>&1 | tail -20
 fi
@@ -194,17 +219,21 @@ echo "Built wheel: $wheel_file"
 
 # Repair the wheel (bundle dependencies)
 echo "Repairing wheel..."
+if $verbose; then
+  echo "  Input wheel: $wheel_file"
+fi
 
 if [ "$platform" = "Darwin" ]; then
   # macOS: use delocate
   if ! command -v delocate-wheel &> /dev/null; then
-    echo "Installing delocate..."
-    $python -m pip install --quiet delocate
+    echo "Error: delocate not found. Install with: pip install -r requirements-dev.txt" >&2
+    exit 1
   fi
   
   # delocate repairs the wheel in place or to wheelhouse/
   mkdir -p wheelhouse
   if $verbose; then
+    echo "  Command: delocate-wheel -v -w wheelhouse $wheel_file"
     delocate-wheel -v -w wheelhouse "$wheel_file"
   else
     delocate-wheel -w wheelhouse "$wheel_file"
@@ -224,8 +253,8 @@ if [ "$platform" = "Darwin" ]; then
 else
   # Linux: use auditwheel
   if ! command -v auditwheel &> /dev/null; then
-    echo "Installing auditwheel..."
-    $python -m pip install --quiet auditwheel
+    echo "Error: auditwheel not found. Install with: pip install -r requirements-dev.txt" >&2
+    exit 1
   fi
   
   # Determine CUDA library exclusions
@@ -252,6 +281,7 @@ else
   auditwheel_args="$auditwheel_args --exclude libcuda.so.1"
   
   if $verbose; then
+    echo "  Command: auditwheel $auditwheel_args"
     auditwheel -v $auditwheel_args
   else
     auditwheel $auditwheel_args
@@ -295,6 +325,9 @@ if $run_tests; then
   fi
   
   # Run validation (will auto-detect test files from repo)
+  if $verbose; then
+    echo "  Command: bash $this_file_dir/validate_pycudaq.sh $validate_args"
+  fi
   bash "$this_file_dir/validate_pycudaq.sh" $validate_args
   if [ $? -ne 0 ]; then
     echo "Validation failed!" >&2
