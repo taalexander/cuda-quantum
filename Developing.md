@@ -144,14 +144,14 @@ To test your changes as a Python wheel, use the wheel build script:
 bash scripts/build_wheel.sh -c 12   # CUDA 12
 bash scripts/build_wheel.sh -c 13   # CUDA 13
 
-# macOS (CPU-only)
+# macOS (CPU-only) - requires -p for prerequisites
 bash scripts/build_wheel.sh -p
 ```
 
 The wheel will be placed in `dist/` by default.
 
-**Note**: On macOS, use `-p` to ensure prerequisites are installed.
-The script is idempotent and skips already-installed dependencies.
+**Note**: On macOS, `-p` is **required** to install LLVM and other dependencies.
+The script is idempotent and skips already-installed prerequisites on subsequent runs.
 
 ### Build Options
 

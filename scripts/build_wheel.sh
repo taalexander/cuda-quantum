@@ -42,9 +42,6 @@ cd "$repo_root"
 platform=$(uname)
 arch=$(uname -m)
 
-# Set default install prefix environment variables
-source "$this_file_dir/set_env_defaults.sh"
-
 # Default values
 cuda_variant=""
 output_dir="dist"
@@ -84,7 +81,12 @@ done
 OPTIND=$__optind__
 
 # Install prerequisites (opt-in with -p or -T)
+# When installing prerequisites, we also set default install prefix env vars
+# so CMake knows where to find them. Without -p/-T, CMake uses standard discovery.
 if $install_prereqs; then
+  # Set defaults for where prerequisites will be installed
+  source "$this_file_dir/set_env_defaults.sh"
+  
   echo "Installing prerequisites..."
   prereq_args=""
   if [ -n "$install_toolchain" ]; then

@@ -117,7 +117,12 @@ fi
 mkdir -p logs && rm -rf logs/*
 
 # Install prerequisites (opt-in with -p or -t)
+# When installing prerequisites, we also set default install prefix env vars
+# so CMake knows where to find them. Without -p/-t, CMake uses standard discovery.
 if $install_prereqs || [ -n "$install_toolchain" ]; then
+  # Set defaults for where prerequisites will be installed
+  source "$this_file_dir/set_env_defaults.sh"
+  
   echo "Installing prerequisites..."
   prereq_args=""
   if [ -n "$install_toolchain" ]; then
@@ -142,9 +147,6 @@ if $install_prereqs || [ -n "$install_toolchain" ]; then
     cd "$working_dir" && (return 0 2>/dev/null) && return 1 || exit 1
   fi
 fi
-
-# Set default install prefix environment variables
-source "$this_file_dir/set_env_defaults.sh"
 
 # Check if a suitable CUDA version is installed
 cuda_driver=${CUDACXX:-${CUDA_HOME:-/usr/local/cuda}/bin/nvcc}
