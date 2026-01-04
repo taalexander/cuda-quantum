@@ -16,6 +16,8 @@ CLI
 CMake
 CNOT
 COBYLA
+Xcode
+Homebrew
 CPTP
 CPU
 CPUs
