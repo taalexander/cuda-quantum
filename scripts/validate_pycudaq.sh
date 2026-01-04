@@ -67,13 +67,7 @@ if [ -z "$root_folder" ]; then
     this_file_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     repo_root=$(cd "$this_file_dir" && git rev-parse --show-toplevel 2>/dev/null)
     
-    # Look for README.md or README.md.in (template)
-    readme_src="$repo_root/python/README.md"
-    if [ ! -f "$readme_src" ]; then
-        readme_src="$repo_root/python/README.md.in"
-    fi
-    
-    if [ -n "$repo_root" ] && [ -f "$readme_src" ]; then
+    if [ -n "$repo_root" ] && [ -f "$repo_root/python/README.md" ]; then
         echo "Auto-detecting test files from repo: $repo_root"
         
         # Use staging location in repo (gitignored via /*build*/)
@@ -83,7 +77,7 @@ if [ -z "$root_folder" ]; then
         mkdir -p "$staging_dir"
         
         # Symlink test files to staging (mirrors CI copy structure)
-        ln -sf "$readme_src" "$staging_dir/README.md"
+        ln -sf "$repo_root/python/README.md" "$staging_dir/README.md"
         ln -sf "$repo_root/python/tests" "$staging_dir/tests"
         ln -sf "$repo_root/docs/sphinx/examples/python" "$staging_dir/examples"
         ln -sf "$repo_root/docs/sphinx/snippets/python" "$staging_dir/snippets"
@@ -101,6 +95,8 @@ if [ ! -d "$root_folder" ] || [ ! -f "$readme_file" ] ; then
     echo -e "\e[01;31mDid not find Python root folder. Please pass the folder containing the README and tests with -f, or run from repo root.\e[0m" >&2
     (return 0 2>/dev/null) && return 100 || exit 100
 fi
+
+echo "Using test root folder: $root_folder"
 
 # Detect platform
 is_macos=false

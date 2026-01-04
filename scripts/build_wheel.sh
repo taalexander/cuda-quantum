@@ -19,6 +19,10 @@
 #   -c <cuda_version>: CUDA variant, 12 or 13 (Linux only; macOS always uses cu13)
 #   -o <output_dir>: Output directory for wheels (default: dist)
 #   -a <assets_dir>: Directory containing external simulator assets (default: assets)
+#   -t: Run validation tests after build
+#   -q: Quick test mode (only run core tests, implies -t)
+#   -p: Install prerequisites before building
+#   -T <toolchain>: Toolchain to use with prerequisites (e.g., gcc12, llvm)
 #   -v: Verbose output
 #
 # Environment variables:
@@ -38,22 +42,37 @@ cd "$repo_root"
 platform=$(uname)
 arch=$(uname -m)
 
+# Set default install prefix environment variables
+source "$this_file_dir/set_env_defaults.sh"
+
 # Default values
 cuda_variant=""
 output_dir="dist"
 assets_dir="assets"
+run_tests=false
+quick_test=false
+install_prereqs=false
+install_toolchain=""
 verbose=false
 
 # Parse command line arguments
 __optind__=$OPTIND
 OPTIND=1
-while getopts ":c:o:a:v" opt; do
+while getopts ":c:o:a:tqpT:v" opt; do
   case $opt in
     c) cuda_variant="$OPTARG"
     ;;
     o) output_dir="$OPTARG"
     ;;
     a) assets_dir="$OPTARG"
+    ;;
+    t) run_tests=true
+    ;;
+    q) quick_test=true; run_tests=true
+    ;;
+    p) install_prereqs=true
+    ;;
+    T) install_prereqs=true; install_toolchain="$OPTARG"
     ;;
     v) verbose=true
     ;;
@@ -63,6 +82,24 @@ while getopts ":c:o:a:v" opt; do
   esac
 done
 OPTIND=$__optind__
+
+# Install prerequisites (opt-in with -p or -T)
+if $install_prereqs; then
+  echo "Installing prerequisites..."
+  prereq_args=""
+  if [ -n "$install_toolchain" ]; then
+    prereq_args="-t $install_toolchain"
+  fi
+  if $verbose; then
+    source "$this_file_dir/install_prerequisites.sh" $prereq_args
+  else
+    source "$this_file_dir/install_prerequisites.sh" $prereq_args 2>&1 | tail -5
+  fi
+  if [ $? -ne 0 ]; then
+    echo "Error: Failed to install prerequisites" >&2
+    exit 1
+  fi
+fi
 
 # Determine CUDA variant
 if [ "$platform" = "Darwin" ]; then
@@ -97,7 +134,7 @@ if [ ! -f "$pyproject_src" ]; then
   exit 1
 fi
 echo "Using pyproject: $pyproject_src"
-cp "$pyproject_src" pyproject.toml
+cp -f "$pyproject_src" pyproject.toml 2>/dev/null || true
 
 # Set up library path environment variable
 if [ "$platform" = "Darwin" ]; then
@@ -232,3 +269,34 @@ fi
 
 echo "Done! Wheel available in $output_dir/"
 
+# Run validation tests if requested
+if $run_tests; then
+  echo ""
+  echo "Running validation tests..."
+  
+  # Build validation script arguments (auto-detects test files from repo)
+  validate_args="-v $SETUPTOOLS_SCM_PRETEND_VERSION -i $output_dir"
+  
+  if $quick_test; then
+    validate_args="$validate_args -q"
+  fi
+  
+  # Add CUDA version for Linux
+  if [ "$platform" != "Darwin" ]; then
+    # Determine full CUDA version for conda (e.g., 12.6.0)
+    if [ "$cuda_variant" = "12" ]; then
+      cuda_version_conda="${CUDA_VERSION_CONDA:-12.6.0}"
+    else
+      cuda_version_conda="${CUDA_VERSION_CONDA:-13.0.0}"
+    fi
+    validate_args="$validate_args -c $cuda_version_conda"
+  fi
+  
+  # Run validation (will auto-detect test files from repo)
+  bash "$this_file_dir/validate_pycudaq.sh" $validate_args
+  if [ $? -ne 0 ]; then
+    echo "Validation failed!" >&2
+    exit 1
+  fi
+  echo "Validation passed!"
+fi

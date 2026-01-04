@@ -17,16 +17,12 @@
 # is already set, it won't be overridden.
 #
 # Platform-specific defaults:
-#   macOS:  Uses $HOME/.local/* for user-local installs
+#   macOS:  Uses $HOME/.local/* and $HOME/.llvm for user-local installs
 #   Linux:  Uses /usr/local/* and /opt/* for system-wide installs
 
 if [ "$(uname)" = "Darwin" ]; then
   # macOS: user-local installations (no sudo required)
-  mkdir -p $HOME/.local/bin
-  mkdir -p $HOME/.local/share/lib
-  export PATH="$PATH:$HOME/.local/bin"
-  export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$HOME/.local/share/lib"
-  export LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-$HOME/.local/llvm}
+  export LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-$HOME/.llvm}
   export BLAS_INSTALL_PREFIX=${BLAS_INSTALL_PREFIX:-$HOME/.local/blas}
   export ZLIB_INSTALL_PREFIX=${ZLIB_INSTALL_PREFIX:-$HOME/.local/zlib}
   export OPENSSL_INSTALL_PREFIX=${OPENSSL_INSTALL_PREFIX:-$HOME/.local/ssl}
