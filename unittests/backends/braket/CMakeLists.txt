@@ -24,13 +24,5 @@ target_link_libraries(test_braket
   cudaq-platform-default 
   gtest_main)
 
-# On macOS, explicitly link against cudaq-serverhelper-braket to ensure
-# the ServerHelper registration runs. The linker would otherwise strip
-# the registration code from cudaq-rest-qpu since no symbols are directly referenced.
-if (APPLE)
-  target_link_libraries(test_braket PRIVATE cudaq-serverhelper-braket)
-endif()
-
-
 configure_file("BraketStartServerAndTest.sh.in" "${CMAKE_BINARY_DIR}/unittests/backends/braket/BraketStartServerAndTest.sh" @ONLY)
 add_test(NAME braket-tests COMMAND bash BraketStartServerAndTest.sh WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/unittests/backends/braket/)
