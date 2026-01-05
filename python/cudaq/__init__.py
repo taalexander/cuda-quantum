@@ -207,7 +207,22 @@ OptimizationResult = cudaq_runtime.OptimizationResult
 __version__ = cudaq_runtime.__version__
 initialize_cudaq = cudaq_runtime.initialize_cudaq
 set_target = cudaq_runtime.set_target
-reset_target = cudaq_runtime.reset_target
+
+def reset_target():
+    """Reset the current target to the default.
+
+    Wrapper around the pybind method.
+    
+    On macOS, this also triggers garbage collection to ensure C++ state
+    is properly cleaned up before a new target is set. This prevents crashes
+    from dangling references when switching targets in test suites.
+    """
+    import gc
+    import sys
+    cudaq_runtime.reset_target()
+    if sys.platform == 'darwin':
+        gc.collect()
+
 has_target = cudaq_runtime.has_target
 get_target = cudaq_runtime.get_target
 get_targets = cudaq_runtime.get_targets
