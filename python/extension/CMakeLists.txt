@@ -172,13 +172,21 @@ if(APPLE)
 endif()
 
 if (NOT SKBUILD)
-  SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH}:$ORIGIN/../../lib:$ORIGIN/../../lib/plugins")
+  if(APPLE)
+    SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};@loader_path/../../lib;@loader_path/../../lib/plugins")
+  else()
+    SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH}:$ORIGIN/../../lib:$ORIGIN/../../lib/plugins")
+  endif()
   set_property(TARGET CUDAQuantumPythonModules.extension._quakeDialects.dso
-    APPEND PROPERTY INSTALL_RPATH "${_origin_prefix}/../../../lib:${_origin_prefix}/../../../lib/plugins")
+    APPEND PROPERTY INSTALL_RPATH "${_origin_prefix}/../../../lib;${_origin_prefix}/../../../lib/plugins")
 else()
-  SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH}:$ORIGIN/../cuda_quantum.libs")
+  if(APPLE)
+    SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};@loader_path/../cuda_quantum.libs")
+  else()
+    SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH}:$ORIGIN/../cuda_quantum.libs")
+  endif()
   set_property(TARGET CUDAQuantumPythonModules.extension._quakeDialects.dso
-    APPEND PROPERTY INSTALL_RPATH "${_origin_prefix}/../../../lib:${_origin_prefix}/../../../cuda_quantum.libs")
+    APPEND PROPERTY INSTALL_RPATH "${_origin_prefix}/../../../lib;${_origin_prefix}/../../../cuda_quantum.libs")
 endif()
 
 
