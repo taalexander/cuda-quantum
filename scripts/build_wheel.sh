@@ -231,12 +231,15 @@ if [ "$platform" = "Darwin" ]; then
   fi
   
   # delocate repairs the wheel in place or to wheelhouse/
+  # Use --ignore-missing because internal libs reference each other via @rpath
+  # and delocate can't resolve them (they're all packaged together)
   mkdir -p wheelhouse
+  delocate_args="--ignore-missing -w wheelhouse"
   if $verbose; then
-    echo "  Command: delocate-wheel -v -w wheelhouse $wheel_file"
-    delocate-wheel -v -w wheelhouse "$wheel_file"
+    echo "  Command: delocate-wheel -v $delocate_args $wheel_file"
+    delocate-wheel -v $delocate_args "$wheel_file"
   else
-    delocate-wheel -w wheelhouse "$wheel_file"
+    delocate-wheel $delocate_args "$wheel_file"
   fi
   
   # Move repaired wheel to output

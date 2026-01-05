@@ -67,7 +67,13 @@ if [ -z "$root_folder" ]; then
     this_file_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     repo_root=$(cd "$this_file_dir" && git rev-parse --show-toplevel 2>/dev/null)
     
-    if [ -n "$repo_root" ] && [ -f "$repo_root/python/README.md" ]; then
+    # Look for README.md or README.md.in (template)
+    readme_src="$repo_root/python/README.md"
+    if [ ! -f "$readme_src" ]; then
+        readme_src="$repo_root/python/README.md.in"
+    fi
+    
+    if [ -n "$repo_root" ] && [ -f "$readme_src" ]; then
         echo "Auto-detecting test files from repo: $repo_root"
         
         # Use staging location in repo (gitignored via /*build*/)
@@ -77,7 +83,7 @@ if [ -z "$root_folder" ]; then
         mkdir -p "$staging_dir"
         
         # Symlink test files to staging (mirrors CI copy structure)
-        ln -sf "$repo_root/python/README.md" "$staging_dir/README.md"
+        ln -sf "$readme_src" "$staging_dir/README.md"
         ln -sf "$repo_root/python/tests" "$staging_dir/tests"
         ln -sf "$repo_root/docs/sphinx/examples/python" "$staging_dir/examples"
         ln -sf "$repo_root/docs/sphinx/snippets/python" "$staging_dir/snippets"
@@ -111,14 +117,10 @@ if ! $is_macos && ! [[ $cuda_version_conda =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     (return 0 2>/dev/null) && return 100 || exit 100
 fi
 
-# Install Miniconda 
-if [ ! -x "$(command -v conda)" ]; then
+# Install Miniconda (Linux only - macOS uses venv)
+if ! $is_macos && [ ! -x "$(command -v conda)" ]; then
     mkdir -p ~/.miniconda3
-    if $is_macos; then
-        curl -fsSL https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-$(uname -m).sh -o ~/.miniconda3/miniconda.sh
-    else
-        wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$(uname -m).sh -O ~/.miniconda3/miniconda.sh
-    fi
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$(uname -m).sh -O ~/.miniconda3/miniconda.sh
     bash ~/.miniconda3/miniconda.sh -b -u -p ~/.miniconda3
     rm -rf ~/.miniconda3/miniconda.sh
     eval "$(~/.miniconda3/bin/conda shell.bash hook)"
@@ -130,32 +132,56 @@ if [ -n "${extra_packages}" ]; then
 fi
 
 if $is_macos; then
-    # macOS: read from macOS-specific section
-    conda_script="$(awk '/(Begin macos install)/{flag=1;next}/(End macos install)/{flag=0}flag' "$readme_file" | grep . | sed '/^```/d')" 
+    # macOS: use venv (simpler, no conda ToS issues, no MPI needed for CPU-only)
+    venv_dir="$HOME/.venv/cudaq-validation"
+    
+    if [ -d "$venv_dir" ]; then
+        echo "Reusing existing venv at $venv_dir (delete it to start fresh)"
+    else
+        echo "Creating venv at $venv_dir"
+        python3 -m venv "$venv_dir"
+    fi
+    source "$venv_dir/bin/activate"
+    
+    # Install the wheel from local directory
+    if [ -n "${extra_packages}" ]; then
+        wheel_file=$(ls "${extra_packages}"/cuda_quantum*.whl 2>/dev/null | head -1)
+        if [ -n "$wheel_file" ]; then
+            echo "Installing wheel: $wheel_file"
+            pip install --upgrade "$wheel_file" -v
+        else
+            echo "No wheel found in ${extra_packages}, installing from PyPI"
+            pip install --upgrade cudaq==${cudaq_version} -v
+        fi
+    else
+        pip install --upgrade cudaq==${cudaq_version} -v
+    fi
 else
-    # Linux: full conda setup with CUDA
+    # Linux: full conda setup with CUDA and MPI
     conda_script="$(awk '/(Begin conda install)/{flag=1;next}/(End conda install)/{flag=0}flag' "$readme_file" | grep . | sed '/^```/d')" 
-fi
-
-while IFS= read -r line; do
-    line=$(echo $line | sed -E "s/cuda_version=(.\{\{)?\s?\S+\s?(\}\})?/cuda_version=${cuda_version_conda} /g")
-    line=$(echo $line | sed -E "s/python(=)?3.[0-9]{1,}/python\1${python_version}/g")
+    
+    while IFS= read -r line; do
+        line=$(echo $line | sed -E "s/cuda_version=(.\{\{)?\s?\S+\s?(\}\})?/cuda_version=${cuda_version_conda} /g")
+        line=$(echo $line | sed -E "s/python(=)?3.[0-9]{1,}/python\1${python_version}/g")
         # Replace template variables like ${{ package_name }} or package names with actual install
         line=$(echo "$line" | sed -E 's/\$\{\{\s*[^}]+\s*\}\}/cudaq/g')
         line=$(echo "$line" | sed -E "s|pip install cudaq|pip install cudaq==${cudaq_version} -v ${pip_extra_arg}|g")
-    if [ -n "$(echo $line | grep "conda activate")" ]; then
-        conda_env=$(echo "$line" | sed "s#conda activate##" | tr -d '[:space:]')
-        source $(conda info --base)/bin/activate $conda_env
-    elif [ -n "$(echo $line | grep "conda create")" ]; then
-        # Skip conda create if environment already exists
-        env_name=$(echo "$line" | grep -oE '\-n\s+[^\s]+' | sed 's/-n //')
-        if ! conda env list | grep -q "$env_name"; then
+        if [ -n "$(echo $line | grep "conda activate")" ]; then
+            conda_env=$(echo "$line" | sed "s#conda activate##" | tr -d '[:space:]')
+            source $(conda info --base)/bin/activate $conda_env
+        elif [ -n "$(echo $line | grep "conda create")" ]; then
+            # Skip conda create if environment already exists
+            env_name=$(echo "$line" | grep -oE '\-n\s+[^\s]+' | sed 's/-n //')
+            if ! conda env list | grep -q "$env_name"; then
+                # Use conda-forge to avoid Anaconda ToS requirements
+                line=$(echo "$line" | sed 's/conda create/conda create -c conda-forge/')
+                eval "$line"
+            fi
+        elif [ -n "$(echo $line | tr -d '[:space:]')" ]; then
             eval "$line"
         fi
-    elif [ -n "$(echo $line | tr -d '[:space:]')" ]; then
-        eval "$line"
-    fi
-done <<< "$conda_script"
+    done <<< "$conda_script"
+fi
 
 # Run OpenMPI setup (Linux only)
 if ! $is_macos; then
