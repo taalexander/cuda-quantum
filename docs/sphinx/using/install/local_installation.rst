@@ -249,6 +249,20 @@ If your platform is not :ref:`officially supported <dependencies-and-compatibili
 `pip` does not find a compatible wheel to install, you can build your own 
 wheel from source following the instructions here: :doc:`data_center_install`.
 
+.. note::
+
+    **macOS Runtime Limitations**
+
+    - **Large qubit allocations**: macOS has a smaller default stack size (8MB).
+      Allocating large arrays in cudaq kernels may cause stack overflow errors.
+
+    - **Thread limits**: macOS has lower per-process thread limits (~1392-2088)
+      compared to Linux. Workflows creating many quantum kernels
+      simultaneously may exhaust this limit. Workarounds include reducing
+      the number of kernels alive at once, increasing limits via
+      ``ulimit -n <procs>``, or enabling server performance mode.
+      See `macOS process limits <https://apple.stackexchange.com/questions/373063>`_.
+
 To build the CUDA-Q Python API for the purpose of contributing to
 our `GitHub repository <https://github.com/NVIDIA/cuda-quantum>`__,
 follow the instructions for 
