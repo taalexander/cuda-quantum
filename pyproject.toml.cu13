@@ -81,5 +81,13 @@ cmake.args = [
     "-DCUDAQ_BUILD_TESTS=TRUE"
 ]
 
+# macOS: Disable symbol stripping. LLVM's JIT relies on local symbols for
+# internal data structures (eg., PassRegistry). On macOS
+# with it's two-level namespace they are removed by stripping which
+# can cause failures so we disable.
+[[tool.scikit-build.overrides]]
+if.platform-system = "darwin"
+install.strip = false
+
 [tool.setuptools_scm]
 write_to = "_version.py"
