@@ -195,7 +195,9 @@ def _infer_best_package() -> str:
 
     # Handle macOS - use cu13 package (CPU-only due to environment markers)
     if sys.platform == 'darwin':
-        _log("macOS detected, using cuda-quantum-cu13 (CPU-only, CUDA deps excluded)")
+        _log(
+            "macOS detected, using cuda-quantum-cu13 (CPU-only, CUDA deps excluded)"
+        )
         cudaq_bdist = 'cuda-quantum-cu13'
     else:
         # Linux: detect CUDA version
