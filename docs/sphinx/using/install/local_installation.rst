@@ -261,7 +261,8 @@ wheel from source following the instructions here: :doc:`data_center_install`.
       simultaneously may exhaust this limit. Workarounds include reducing
       the number of kernels alive at once, increasing limits via
       ``ulimit -n <procs>``, or enabling server performance mode.
-      See `macOS process limits <https://apple.stackexchange.com/questions/373063>`_.
+      If this occurs, reduce concurrency or raise limits via
+      ``ulimit -u`` and ``launchctl limit maxthreads``.
 
 To build the CUDA-Q Python API for the purpose of contributing to
 our `GitHub repository <https://github.com/NVIDIA/cuda-quantum>`__,
