@@ -151,7 +151,8 @@ bash scripts/build_wheel.sh -p
 The wheel will be placed in `dist/` by default.
 
 **Note**: On macOS, `-p` is **required** to install LLVM and other dependencies.
-The script is idempotent and skips already-installed prerequisites on subsequent runs.
+The script is idempotent and skips already-installed prerequisites on subsequent
+runs.
 
 ### Build Options
 

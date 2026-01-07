@@ -72,7 +72,7 @@ CUDA-Q can be built on macOS for development purposes. Note that:
 - **Prerequisites required**: You must use `-p` to install LLVM and other dependencies
 
 Before building, complete the macOS setup steps in
-[`Dev_Setup.md`](./Dev_Setup.md#working-on-macos). 
+[`Dev_Setup.md`](./Dev_Setup.md#working-on-macos).
 
 ### Building
 
