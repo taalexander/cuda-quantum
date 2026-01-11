@@ -137,8 +137,10 @@ add_mlir_python_common_capi_library(CUDAQuantumPythonCAPI
     MLIRPythonSources.Core
 )
 
-# macOS: Force-load LLVM target libraries to ensure static initializers run.
-add_lib_loading_macos_workaround(CUDAQuantumPythonCAPI TRUE)
+# Note: We previously used add_lib_loading_macos_workaround here, but it causes
+# duplicate LLVM CommandLine option registration errors due to -force_load.
+# The explicit llvm::InitializeNativeTarget() calls in CUDAQuantumExtension.cpp
+# handle the necessary target initialization on macOS.
 
 ################################################################################
 # Instantiation of Python module
@@ -177,5 +179,7 @@ endif()
 
 
 
-# macOS: Force-load LLVM target libraries to ensure static initializers run
-add_lib_loading_macos_workaround(CUDAQuantumPythonModules.extension._quakeDialects.dso TRUE)
+# Note: We previously used add_lib_loading_macos_workaround here, but it causes
+# duplicate LLVM CommandLine option registration errors due to -force_load.
+# The explicit llvm::InitializeNativeTarget() calls in CUDAQuantumExtension.cpp
+# handle the necessary target initialization on macOS.
