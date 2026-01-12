@@ -15,6 +15,8 @@ import numpy as np
 import warnings
 import pytest
 
+from conftest import skip_macos_arm64_jit_exception
+
 skipIfBraketNotInstalled = pytest.mark.skipif(
     not (cudaq.has_target("braket")),
     reason='Could not find `braket` in installation')
@@ -1086,6 +1088,7 @@ def test_create_and_modify_struct():
     assert results[0] == Bar(True, True, 4.14)
 
 
+@skip_macos_arm64_jit_exception
 def test_unsupported_return_type():
 
     with pytest.raises(RuntimeError) as e:
