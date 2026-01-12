@@ -102,7 +102,11 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
    CUDAQuantumMLIRCAPI
    MLIRCAPIExecutionEngine
   PRIVATE_LINK_LIBS
-   ${PYTHON_MLIR_LIBS}
+   OptCodeGen
+   OptTransforms
+   MLIRPass
+   CUDAQTargetConfigUtil
+   cudaq-python-interop
    cudaq-platform-default
 )
 
