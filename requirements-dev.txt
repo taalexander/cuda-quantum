@@ -6,24 +6,27 @@
 # the terms of the Apache License 2.0 which accompanies this distribution.     #
 # ============================================================================ #
 
-# Development dependencies for building and testing CUDA-Q
-build
-delocate; sys_platform == "darwin"
-auditwheel; sys_platform == "linux"
+# Development and CI dependencies for building/testing CUDA-Q.
+# Versions are pinned for CI reproducibility. The wheel's pyproject.toml uses
+# flexible version specs for end-user flexibility.
+
+build==1.4.0
+delocate==0.13.0; sys_platform == "darwin"
+auditwheel==6.3.0; sys_platform == "linux"
 lit==18.1.4
 pytest==8.3.0
-psutil
+psutil==7.2.1
 numpy==1.26.4
-llvmlite==0.44.0
 scipy==1.16.3
-requests==2.31.0
+requests==2.32.3
+llvmlite==0.44.0
+openfermion==1.7.1
+openfermionpyscf==0.5
+h5py==3.12.1
 fastapi==0.111.0
 uvicorn==0.29.0
 pydantic==2.12.5
-openfermionpyscf==0.5
-h5py==3.12.1
-matplotlib
+matplotlib==3.10.8
 pyspelling==2.10
 pymdown-extensions==10.8.1
-yapf
-
+yapf==0.43.0
