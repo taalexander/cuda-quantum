@@ -16,8 +16,6 @@ CLI
 CMake
 CNOT
 COBYLA
-Xcode
-Homebrew
 CPTP
 CPU
 CPUs
@@ -50,6 +48,7 @@ Hadamard
 Hadamards
 Hamiltonian
 Hamiltonians
+Homebrew
 Homebrew
 IQM
 InfiniBand
@@ -136,6 +135,7 @@ UCCSD
 VQE
 Vazirani
 WSL
+Xcode
 Xcode
 Zener
 accessor
