@@ -256,13 +256,10 @@ wheel from source following the instructions here: :doc:`data_center_install`.
     - **Large qubit allocations**: macOS has a smaller default stack size (8MB).
       Allocating large arrays in cudaq kernels may cause stack overflow errors.
 
-    - **Thread limits**: macOS has lower per-process thread limits (~1392-2088)
-      compared to Linux. Workflows creating many quantum kernels
-      simultaneously may exhaust this limit. Workarounds include reducing
-      the number of kernels alive at once, increasing limits via
-      ``ulimit -n <procs>``, or enabling server performance mode.
-      If this occurs, reduce concurrency or raise limits via
-      ``ulimit -u`` and ``launchctl limit maxthreads``.
+    - **JIT exception handling (ARM64)**: On macOS with Apple Silicon (M-series),
+      C++ exceptions thrown from JIT-compiled quantum kernels cannot be caught.
+      This is due to an `upstream LLVM bug <https://github.com/llvm/llvm-project/issues/49036>`_.
+      Code that expects to catch runtime errors from kernel execution may abort instead.
 
 To build the CUDA-Q Python API for the purpose of contributing to
 our `GitHub repository <https://github.com/NVIDIA/cuda-quantum>`__,
