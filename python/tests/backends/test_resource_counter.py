@@ -1,5 +1,5 @@
 # ============================================================================ #
-# Copyright (c) 2026 NVIDIA Corporation & Affiliates.                          #
+# Copyright (c) 2025 - 2026 NVIDIA Corporation & Affiliates.                   #
 # All rights reserved.                                                         #
 #                                                                              #
 # This source code and the accompanying materials are made available under     #
@@ -8,9 +8,10 @@
 
 import cudaq
 import pytest
+from conftest import skip_macos_arm64_jit_exception
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="function", autouse=True)
 def clean():
     cudaq.reset_target()
 
@@ -91,7 +92,7 @@ def test_control_gates_resources():
     assert d["ch"] == 1
 
 
-def test_choice_function():
+def test_choice_function_1():
 
     @cudaq.kernel
     def mykernel():
@@ -140,7 +141,7 @@ def test_choice_function():
     assert d2["x"] == 1
 
 
-def test_choice_function():
+def test_choice_function_2():
 
     @cudaq.kernel
     def mykernel():
@@ -174,6 +175,7 @@ def test_choice_function():
     assert counts3.count("00") + counts3.count("11") == 10
 
 
+@skip_macos_arm64_jit_exception
 def test_sample_in_choice():
 
     @cudaq.kernel
@@ -195,11 +197,11 @@ def test_sample_in_choice():
         return True
 
     with pytest.raises(RuntimeError):
-        cudaq.estimate_resources(mykernel, choice)
+        cudaq.estimate_resources(mykernel, choice=choice)
 
     with pytest.raises(RuntimeError):
         cudaq.set_target("quantinuum", emulate=True)
-        cudaq.estimate_resources(mykernel, choice)
+        cudaq.estimate_resources(mykernel, choice=choice)
 
 
 def test_loop_with_args():

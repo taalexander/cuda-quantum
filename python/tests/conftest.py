@@ -14,9 +14,8 @@ import sys
 import platform
 import pytest
 
-# On macOS ARM64, C++ exceptions from JIT-compiled code cannot be caught.
-# The process aborts instead of raising a catchable exception.
-# See Building.md macOS Limitations and https://github.com/llvm/llvm-project/issues/49036
+# Decorator for tests that fail on macOS ARM64 due to JIT exception handling bug.
 skip_macos_arm64_jit_exception = pytest.mark.skipif(
     sys.platform == 'darwin' and platform.machine() == 'arm64',
-    reason="JIT exception handling broken on macOS ARM64 (llvm-project#49036)")
+    reason="JIT exception handling broken on macOS ARM64 (llvm-project#49036)"
+)

@@ -14,7 +14,6 @@ import cudaq
 import numpy as np
 import warnings
 import pytest
-
 from conftest import skip_macos_arm64_jit_exception
 
 skipIfBraketNotInstalled = pytest.mark.skipif(
