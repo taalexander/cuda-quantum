@@ -156,24 +156,24 @@ runs.
 
 ### Build Options
 
-| Option | Description |
-|--------|-------------|
-| `-c <12\|13>` | CUDA version (required on Linux, ignored on macOS) |
-| `-o <dir>` | Output directory (default: `dist`) |
-| `-a <dir>` | External simulator assets directory (default: `assets`) |
-| `-p` | Install prerequisites before building |
-| `-T <toolchain>` | Install prerequisites with toolchain (e.g., `gcc12`, `llvm`), implies `-p` |
-| `-i` | Incremental build (reuse existing artifacts) |
-| `-t` | Run validation tests after build |
-| `-q` | Quick test mode (core tests only, implies `-t`) |
-| `-v` | Verbose output |
+| Option           | Description                                                                 |
+| ---------------- | --------------------------------------------------------------------------- |
+| `-c <12\|13>`    | CUDA version (required on Linux, ignored on macOS)                          |
+| `-o <dir>`       | Output directory (default: `dist`)                                          |
+| `-a <dir>`       | External simulator assets directory (default: `assets`)                     |
+| `-p`             | Install prerequisites before building                                       |
+| `-T <toolchain>` | Install prerequisites with toolchain (e.g., `gcc12`, `llvm`), implies `-p`  |
+| `-i`             | Incremental build (reuse existing artifacts)                                |
+| `-t`             | Run validation tests after build                                            |
+| `-q`             | Quick test mode (core tests only, implies `-t`)                             |
+| `-v`             | Verbose output                                                              |
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `PYTHON` | Python interpreter to use (default: `python3`) |
-| `CUDA_QUANTUM_VERSION` | Version string for the wheel (default: `0.0.0`) |
+| Variable               | Description                                        |
+| ---------------------- | -------------------------------------------------- |
+| `PYTHON`               | Python interpreter to use (default: `python3`)     |
+| `CUDA_QUANTUM_VERSION` | Version string for the wheel (default: `0.0.0`)    |
 
 ### Building and Testing
 
