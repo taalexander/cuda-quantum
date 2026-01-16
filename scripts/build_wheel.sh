@@ -195,6 +195,64 @@ else
 fi
 mkdir -p "$output_dir"
 
+# Configure OpenMP for parallel execution performance
+# Uses same logic as build_cudaq.sh, with Homebrew fallback for macOS wheel builds
+
+# Try LLVM_INSTALL_PREFIX first (same as build_cudaq.sh)
+OpenMP_libomp_LIBRARY_PATH=""
+OpenMP_SEARCH_PREFIX=""
+if [ -n "$LLVM_INSTALL_PREFIX" ]; then
+  OpenMP_libomp_LIBRARY_PATH=$(find "$LLVM_INSTALL_PREFIX" -name 'libomp.so' -o -name 'libomp.dylib' 2>/dev/null | head -1)
+  if [ -n "$OpenMP_libomp_LIBRARY_PATH" ]; then
+    OpenMP_SEARCH_PREFIX="$LLVM_INSTALL_PREFIX"
+  fi
+fi
+
+# Fallback to Homebrew on macOS if not found in LLVM_INSTALL_PREFIX
+if [ -z "$OpenMP_libomp_LIBRARY_PATH" ] && [ "$platform" = "Darwin" ]; then
+  for brew_path in /opt/homebrew/opt/libomp /usr/local/opt/libomp; do
+    if [ -d "$brew_path" ]; then
+      OpenMP_libomp_LIBRARY_PATH=$(find "$brew_path" -name 'libomp.dylib' 2>/dev/null | head -1)
+      if [ -n "$OpenMP_libomp_LIBRARY_PATH" ]; then
+        OpenMP_SEARCH_PREFIX="$brew_path"
+        break
+      fi
+    fi
+  done
+fi
+if [ -n "$OpenMP_libomp_LIBRARY_PATH" ]; then
+  omp_header_dir=$(find "$OpenMP_SEARCH_PREFIX" -name 'omp.h' -print -quit 2>/dev/null | xargs dirname)
+  # Apple Clang requires -Xpreprocessor -fopenmp; LLVM Clang/GCC use -fopenmp directly
+  # Use -idirafter to add omp.h path AFTER system headers (avoids conflicts with clang's stdint.h)
+  if ${CXX:-c++} --version 2>&1 | grep -q "Apple clang"; then
+    OpenMP_FLAGS="${OpenMP_FLAGS:--Xpreprocessor -fopenmp -idirafter $omp_header_dir}"
+  else
+    OpenMP_FLAGS="${OpenMP_FLAGS:--fopenmp -idirafter $omp_header_dir}"
+  fi
+  echo "OpenMP found: $OpenMP_libomp_LIBRARY_PATH"
+else
+  echo "OpenMP not found - wheel will be built without OpenMP parallelization"
+  if [ "$platform" = "Darwin" ]; then
+    echo "  Option 1: Rebuild with -p flag (includes OpenMP by default on macOS)"
+    echo "  Option 2: brew install libomp"
+  else
+    echo "  Option 1: Set LLVM_PROJECTS to include openmp and rebuild with -p flag:"
+    echo "            export LLVM_PROJECTS='clang;lld;mlir;python-bindings;openmp'"
+    echo "  Option 2: apt install libomp-dev  # or: yum install libomp-devel"
+  fi
+fi
+
+# Build CMAKE_ARGS for OpenMP (same variables as build_cudaq.sh lines 249-253)
+CMAKE_ARGS="${OpenMP_libomp_LIBRARY_PATH:+-DOpenMP_C_LIB_NAMES=omp}"
+CMAKE_ARGS="$CMAKE_ARGS ${OpenMP_libomp_LIBRARY_PATH:+-DOpenMP_CXX_LIB_NAMES=omp}"
+CMAKE_ARGS="$CMAKE_ARGS ${OpenMP_libomp_LIBRARY_PATH:+-DOpenMP_omp_LIBRARY=$OpenMP_libomp_LIBRARY_PATH}"
+CMAKE_ARGS="$CMAKE_ARGS ${OpenMP_FLAGS:+-DOpenMP_C_FLAGS=\"$OpenMP_FLAGS\"}"
+CMAKE_ARGS="$CMAKE_ARGS ${OpenMP_FLAGS:+-DOpenMP_CXX_FLAGS=\"$OpenMP_FLAGS\"}"
+if $verbose && [ -n "$OpenMP_libomp_LIBRARY_PATH" ]; then
+  echo "OpenMP CMAKE_ARGS: $CMAKE_ARGS"
+fi
+export CMAKE_ARGS
+
 # Build the wheel
 echo "Building wheel..."
 if $verbose; then
