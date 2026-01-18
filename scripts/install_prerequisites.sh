@@ -60,10 +60,6 @@ if $install_all; then
   source "$(dirname "${BASH_SOURCE[0]}")/set_env_defaults.sh"
 fi
 
-echo $PATH
-echo $LLVM_INSTALL_PREFIX
-cmake --help
-
 # Create a temporary directory for building source packages
 PREREQS_BUILD_DIR=$(mktemp -d)
 echo "Building prerequisites in $PREREQS_BUILD_DIR"
