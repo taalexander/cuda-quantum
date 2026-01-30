@@ -1,0 +1,466 @@
+name: macOS CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # ============================================================================
+  # Metadata: Get commit hashes for cache keys
+  # ============================================================================
+  metadata:
+    name: Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      llvm_commit: ${{ steps.repo_info.outputs.llvm_commit }}
+      pybind11_commit: ${{ steps.repo_info.outputs.pybind11_commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: repo_info
+        run: |
+          echo "llvm_commit=$(git rev-parse @:./tpls/llvm)" >> $GITHUB_OUTPUT
+          echo "pybind11_commit=$(git rev-parse @:./tpls/pybind11)" >> $GITHUB_OUTPUT
+
+  # ============================================================================
+  # Build prerequisites (LLVM, OpenMP, etc.) WITHOUT Python bindings
+  # Python bindings are rebuilt per-Python-version in build/wheel jobs
+  # This mirrors the Linux CI architecture (wheeldeps → python_wheels)
+  # ============================================================================
+  devdeps:
+    name: Prerequisites (${{ matrix.runner }})
+    needs: metadata
+    strategy:
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      # Minimum supported macOS version determined from CI testing (13.0 Ventura)
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@v4
+        # Note: submodules not needed for this stage - LLVM is cloned to ~/.llvm-project by build script
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: System info
+        run: |
+          echo "=== System ===" 
+          uname -a
+          sw_vers
+          echo "=== Hardware ==="
+          sysctl hw.ncpu hw.memsize
+          df -h
+          echo "=== Toolchain ==="
+          clang --version
+          python3 --version
+          cmake --version
+          brew --version
+
+      - name: Cache prerequisites
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local
+            ~/.llvm-project
+          # Cache: installed libs (~/.local) + LLVM source/build (~/.llvm-project)
+          # Source+build needed for incremental Python bindings rebuild in wheel job
+          key: ${{ matrix.runner }}-devdeps-v4-${{ needs.metadata.outputs.llvm_commit }}
+
+      - name: Build prerequisites
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # Fix CI runner quirk: gcc pre-installed but not linked
+          brew unlink gcc 2>/dev/null || true
+          brew link gcc --overwrite 2>/dev/null || true
+          which gfortran || { echo "ERROR: gfortran not found!"; exit 1; }
+          
+          # Override LLVM_PROJECTS to exclude python-bindings
+          # Python bindings will be rebuilt per-Python-version in wheel job
+          export LLVM_PROJECTS='clang;lld;mlir;openmp'
+          
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
+          source scripts/set_env_defaults.sh
+          echo "=== Build Configuration ==="
+          echo "LLVM_INSTALL_PREFIX=$LLVM_INSTALL_PREFIX"
+          echo "LLVM_PROJECTS=$LLVM_PROJECTS"
+          echo "Building with $(sysctl -n hw.ncpu) cores, $(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 )) GB RAM"
+          
+          bash scripts/install_prerequisites.sh
+
+      - name: Verify installation
+        run: |
+          source scripts/set_env_defaults.sh
+          echo "=== LLVM Installation ==="
+          ls -la $LLVM_INSTALL_PREFIX/bin/ | head -20
+          $LLVM_INSTALL_PREFIX/bin/clang --version
+          echo "=== OpenMP Check ==="
+          ls -la $LLVM_INSTALL_PREFIX/lib/libomp* 2>/dev/null || echo "OpenMP libraries not found"
+          echo "=== LLVM Source + Build ==="
+          ls -la ~/.llvm-project/ 2>/dev/null | head -5 || echo "LLVM project not found"
+          echo "=== Cache sizes ==="
+          du -sh ~/.local || true
+          du -sh ~/.llvm-project || true
+
+  # ============================================================================
+  # Build and test CUDA-Q
+  # ============================================================================
+  build_and_test:
+    name: Build & Test (${{ matrix.runner }})
+    needs: [metadata, devdeps]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Restore prerequisites cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.local
+            ~/.llvm-project
+          key: ${{ matrix.runner }}-devdeps-v4-${{ needs.metadata.outputs.llvm_commit }}
+          fail-on-cache-miss: true
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Build MLIR Python bindings
+        run: |
+          source scripts/set_env_defaults.sh
+          
+          # Incremental rebuild: add python-bindings to cached LLVM build
+          Python3_EXECUTABLE="$(which python3)" \
+          LLVM_PROJECTS='clang;lld;mlir;openmp;python-bindings' \
+          LLVM_SOURCE="$HOME/.llvm-project" \
+          bash scripts/build_llvm.sh -c Release -v
+
+      - name: Build CUDA-Q
+        run: bash scripts/build_cudaq.sh -v
+
+      - name: Run tests
+        run: bash scripts/run_tests.sh -v
+
+  # ============================================================================
+  # Build Python wheels for all supported Python versions
+  # Rebuilds MLIR Python bindings for each Python version from cached LLVM
+  # ============================================================================
+  wheel:
+    name: Wheel (${{ matrix.runner }}, py${{ matrix.python_version }})
+    needs: [metadata, devdeps]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+            python_version: '3.11'
+          - runner: macos-26
+            arch: arm64
+            python_version: '3.12'
+          - runner: macos-26
+            arch: arm64
+            python_version: '3.13'
+          - runner: macos-15-intel
+            arch: x86_64
+            python_version: '3.11'
+          - runner: macos-15-intel
+            arch: x86_64
+            python_version: '3.12'
+          - runner: macos-15-intel
+            arch: x86_64
+            python_version: '3.13'
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    outputs:
+      cudaq_version: ${{ steps.build_wheel.outputs.cudaq_version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python_version }}
+
+      - name: Restore prerequisites cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.local
+            ~/.llvm-project
+          key: ${{ matrix.runner }}-devdeps-v4-${{ needs.metadata.outputs.llvm_commit }}
+          fail-on-cache-miss: true
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Build MLIR Python bindings
+        run: |
+          source scripts/set_env_defaults.sh
+          
+          # Incremental rebuild: add python-bindings to cached LLVM build
+          Python3_EXECUTABLE="$(which python3)" \
+          LLVM_PROJECTS='clang;lld;mlir;openmp;python-bindings' \
+          LLVM_SOURCE="$HOME/.llvm-project" \
+          bash scripts/build_llvm.sh -c Release -v
+
+      - name: Determine version
+        id: version
+        run: |
+          is_versioned=${{ github.ref_type == 'tag' || startsWith(github.ref_name, 'releases/') || startsWith(github.ref_name, 'staging/') }}
+          if ${is_versioned}; then
+            cudaq_version=$(echo ${{ github.ref_name }} | egrep -o "([0-9]{1,}\.)+[0-9]{1,}")
+          else
+            cudaq_version=0.0.0
+          fi
+          echo "cudaq_version=$cudaq_version" >> $GITHUB_OUTPUT
+          echo "Building wheel version: $cudaq_version"
+
+      - name: Build wheel
+        id: build_wheel
+        run: |
+          # Source env defaults to set ZLIB_INSTALL_PREFIX, LLVM_INSTALL_PREFIX, etc.
+          # These point to cached prerequisites in ~/.local
+          source scripts/set_env_defaults.sh
+          
+          export CUDA_QUANTUM_VERSION=${{ steps.version.outputs.cudaq_version }}
+          bash scripts/build_wheel.sh -v
+          
+          # Find and report the built wheel
+          wheel_file=$(ls dist/cuda_quantum*.whl 2>/dev/null | head -1)
+          echo "Built wheel: $wheel_file"
+          echo "cudaq_version=${{ steps.version.outputs.cudaq_version }}" >> $GITHUB_OUTPUT
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pycudaq-macos-${{ matrix.arch }}-py${{ matrix.python_version }}
+          path: dist/cuda_quantum*.whl
+          retention-days: 1
+          if-no-files-found: error
+
+  # ============================================================================
+  # Validate wheels in clean environments
+  # ============================================================================
+  validate_wheel:
+    name: Validate (${{ matrix.runner }}, py${{ matrix.python_version }})
+    needs: wheel
+    strategy:
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+            python_version: '3.11'
+          - runner: macos-26
+            arch: arm64
+            python_version: '3.12'
+          - runner: macos-26
+            arch: arm64
+            python_version: '3.13'
+          - runner: macos-15-intel
+            arch: x86_64
+            python_version: '3.11'
+          - runner: macos-15-intel
+            arch: x86_64
+            python_version: '3.12'
+          - runner: macos-15-intel
+            arch: x86_64
+            python_version: '3.13'
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python_version }}
+
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pycudaq-macos-${{ matrix.arch }}-py${{ matrix.python_version }}
+          path: dist/
+
+      - name: Validate wheel
+        run: |
+          # Full validation: core tests, examples, snippets, backends
+          # GPU/MPI tests are automatically skipped on macOS (CPU-only)
+          bash scripts/validate_pycudaq.sh \
+            -v ${{ needs.wheel.outputs.cudaq_version }} \
+            -i dist \
+            -p ${{ matrix.python_version }}
+
+  # ============================================================================
+  # Build self-extracting installer for C++ SDK
+  # ============================================================================
+  installer:
+    name: Installer (${{ matrix.runner }})
+    needs: [metadata, devdeps]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    outputs:
+      cudaq_version: ${{ steps.version.outputs.cudaq_version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Restore prerequisites cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.local
+            ~/.llvm-project
+          key: ${{ matrix.runner }}-devdeps-v4-${{ needs.metadata.outputs.llvm_commit }}
+          fail-on-cache-miss: true
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          brew install makeself
+
+      - name: Build MLIR Python bindings
+        run: |
+          source scripts/set_env_defaults.sh
+          
+          # Incremental rebuild: add python-bindings to cached LLVM build
+          Python3_EXECUTABLE="$(which python3)" \
+          LLVM_PROJECTS='clang;lld;mlir;openmp;python-bindings' \
+          LLVM_SOURCE="$HOME/.llvm-project" \
+          bash scripts/build_llvm.sh -c Release -v
+
+      - name: Build CUDA-Q
+        run: bash scripts/build_cudaq.sh -v
+
+      - name: Determine version
+        id: version
+        run: |
+          is_versioned=${{ github.ref_type == 'tag' || startsWith(github.ref_name, 'releases/') || startsWith(github.ref_name, 'staging/') }}
+          if ${is_versioned}; then
+            cudaq_version=$(echo ${{ github.ref_name }} | egrep -o "([0-9]{1,}\.)+[0-9]{1,}")
+          else
+            cudaq_version=0.0.0
+          fi
+          echo "cudaq_version=$cudaq_version" >> $GITHUB_OUTPUT
+          echo "Building installer version: $cudaq_version"
+
+      - name: Build installer
+        run: |
+          source scripts/set_env_defaults.sh
+          bash scripts/build_installer.sh -v -V ${{ steps.version.outputs.cudaq_version }}
+          
+          # List output
+          ls -la out/
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cudaq-installer-macos-${{ matrix.arch }}
+          path: out/install_cuda_quantum*
+          retention-days: 1
+          if-no-files-found: error
+
+  # ============================================================================
+  # Validate installation in clean environment
+  # Installer provides C++ support; wheel provides Python support
+  # ============================================================================
+  validate_installation:
+    name: Validate Installation (${{ matrix.runner }})
+    needs: [installer, wheel]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cudaq-installer-macos-${{ matrix.arch }}
+          path: installer/
+
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pycudaq-macos-${{ matrix.arch }}-py3.12
+          path: wheel/
+
+      - name: Install CUDA-Q (C++ via installer)
+        run: |
+          # Make installer executable and run with sudo (installs to /opt/nvidia/cudaq)
+          chmod +x installer/install_cuda_quantum*
+          sudo bash installer/install_cuda_quantum* --accept
+
+      - name: Install CUDA-Q (Python via wheel)
+        run: |
+          # Install wheel for Python support (per documentation, Python is separate)
+          pip install wheel/*.whl
+
+      - name: Validate installation
+        run: |
+          # Source the installer's environment setup to add nvq++ to PATH
+          source /opt/nvidia/cudaq/set_env.sh
+          bash scripts/validate_installation.sh
