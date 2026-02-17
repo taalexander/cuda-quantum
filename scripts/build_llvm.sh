@@ -10,7 +10,9 @@
 
 # This scripts builds the clang and mlir project from the source in the LLVM submodule.
 # The binaries will be installed in the folder defined by the LLVM_INSTALL_PREFIX environment
-# variable, or in $HOME/.llvm if LLVM_INSTALL_PREFIX is not defined.# (e.g. via 'pip install nanobind').
+# variable, or in $HOME/.llvm if LLVM_INSTALL_PREFIX is not defined.
+# If Python bindings are generated, pybind11 will be built and installed in the location 
+# defined by PYBIND11_INSTALL_PREFIX unless that folder already exists.
 #
 # Usage:
 # bash scripts/build_llvm.sh
@@ -32,6 +34,7 @@
 
 LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-$HOME/.llvm}
 LLVM_PROJECTS=${LLVM_PROJECTS:-'clang;lld;mlir;python-bindings'}
+PYBIND11_INSTALL_PREFIX=${PYBIND11_INSTALL_PREFIX:-/usr/local/pybind11}
 Python3_EXECUTABLE=${Python3_EXECUTABLE:-python3}
 
 # Process command line arguments.
@@ -65,20 +68,20 @@ this_file_dir=`dirname "$(readlink -f "${BASH_SOURCE[0]}")"`
 echo "Configured C compiler: $CC"
 echo "Configured C++ compiler: $CXX"
 
-# Check if we build python bindings and ensure nanobind is available.
+# Check if we build python bindings and build pybind11 from source if necessary.
 projects=(`echo $LLVM_PROJECTS | tr ';' ' '`)
 llvm_projects=`printf "%s;" "${projects[@]}"`
 if [ -z "${llvm_projects##*python-bindings;*}" ]; then
   mlir_python_bindings=ON
   projects=("${projects[@]/python-bindings}")
 
-  # MLIR 22+ uses nanobind for Python bindings (pybind11 support was removed).
-  # nanobind is detected at CMake configure time via 'import nanobind' in Python,
-  # so it must be pip-installed (e.g. via requirements-dev.txt).
-  if ! "$Python3_EXECUTABLE" -c "import nanobind" 2>/dev/null; then
-    echo "Error: nanobind is required for MLIR Python bindings but not found."
-    echo "Install it with: $Python3_EXECUTABLE -m pip install nanobind"
-    (return 0 2>/dev/null) && return 1 || exit 1
+  if [ ! -d "$PYBIND11_INSTALL_PREFIX" ] || [ -z "$(ls -A "$PYBIND11_INSTALL_PREFIX"/* 2> /dev/null)" ]; then
+    cd "$this_file_dir" && cd $(git rev-parse --show-toplevel)
+    echo "Building PyBind11..."
+    git submodule update --init --recursive --recommend-shallow --single-branch tpls/pybind11 
+    mkdir -p "tpls/pybind11/build" && cd "tpls/pybind11/build"
+    cmake -G Ninja ../ -DCMAKE_INSTALL_PREFIX="$PYBIND11_INSTALL_PREFIX" -DPYBIND11_TEST=False
+    cmake --build . --target install --config Release
   fi
 fi
 
@@ -96,7 +99,7 @@ fi
 # if they were already applied previously.
 LLVM_CMAKE_PATCHES=${LLVM_CMAKE_PATCHES:-"$this_file_dir/../tpls/customizations/llvm"}
 if [ -d "$LLVM_CMAKE_PATCHES" ]; then 
-  cd "$LLVM_SOURCE" && git checkout $llvm_commit
+  cd "$LLVM_SOURCE" && git checkout -f $llvm_commit
   echo "Applying LLVM patches in $LLVM_CMAKE_PATCHES..."
   for patch in `find "$LLVM_CMAKE_PATCHES"/* -maxdepth 0 -type f -name '*.diff'`; do
     # Check if patch is already applied.
