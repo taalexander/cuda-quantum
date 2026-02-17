@@ -160,14 +160,10 @@ if [ -z "${llvm_projects##*flang;*}" ]; then
 fi
 if [ -z "${llvm_projects##*openmp;*}" ]; then
   echo "- including OpenMP components"
-  # There are no suitable distribution components for libomp. 
-  # We instead manually build suitable targets.
-  install_targets+=" omp"
-  # omptarget (GPU offloading) is only available on Linux with CUDA
-  if [ "$(uname)" != "Darwin" ]; then
-    llvm_components+="omptarget;"
-  fi
-  llvm_components+="openmp-resource-headers;"
+  # LLVM 22+ requires OpenMP to be built as a runtime, not a project.
+  # OpenMP is built/installed via ninja install-runtimes in the runtimes section.
+  llvm_runtimes+="openmp;"
+  llvm_projects="${llvm_projects//openmp;/}"
   projects=("${projects[@]/openmp}")
 fi
 if [ -z "${llvm_projects##*mlir;*}" ]; then
@@ -281,10 +277,15 @@ fi
 # Install libomp if OpenMP was built (no standard install target exists for distribution builds)
 if [ -n "$(echo $install_targets | grep omp)" ]; then
   echo "Installing OpenMP runtime (libomp)..."
+  # LLVM 22+ builds OpenMP as a runtime (under runtimes/) rather than a project (under projects/).
+  omp_install_cmake="runtimes/openmp/runtime/src/cmake_install.cmake"
+  if [ ! -f "$omp_install_cmake" ]; then
+    omp_install_cmake="projects/openmp/runtime/src/cmake_install.cmake"
+  fi
   if $verbose; then
-    cmake -P projects/openmp/runtime/src/cmake_install.cmake
+    cmake -P "$omp_install_cmake"
   else
-    cmake -P projects/openmp/runtime/src/cmake_install.cmake \
+    cmake -P "$omp_install_cmake" \
       2>> "$llvm_log_dir/ninja_error.txt" 1>> "$llvm_log_dir/ninja_output.txt"
   fi
 fi
