@@ -75,13 +75,20 @@ if [ -z "${llvm_projects##*python-bindings;*}" ]; then
   mlir_python_bindings=ON
   projects=("${projects[@]/python-bindings}")
 
+  # LLVM 22+ MLIR Python bindings use nanobind (pip install nanobind).
+  # Older LLVM versions need pybind11 built from source.
   if [ ! -d "$PYBIND11_INSTALL_PREFIX" ] || [ -z "$(ls -A "$PYBIND11_INSTALL_PREFIX"/* 2> /dev/null)" ]; then
-    cd "$this_file_dir" && cd $(git rev-parse --show-toplevel)
-    echo "Building PyBind11..."
-    git submodule update --init --recursive --recommend-shallow --single-branch tpls/pybind11 
-    mkdir -p "tpls/pybind11/build" && cd "tpls/pybind11/build"
-    cmake -G Ninja ../ -DCMAKE_INSTALL_PREFIX="$PYBIND11_INSTALL_PREFIX" -DPYBIND11_TEST=False
-    cmake --build . --target install --config Release
+    # Check if nanobind is available (LLVM 22+); skip pybind11 if so.
+    if $Python3_EXECUTABLE -c "import nanobind" 2>/dev/null; then
+      echo "nanobind found, skipping pybind11 build (LLVM 22+)."
+    else
+      cd "$this_file_dir" && cd $(git rev-parse --show-toplevel)
+      echo "Building PyBind11..."
+      git submodule update --init --recursive --recommend-shallow --single-branch tpls/pybind11 
+      mkdir -p "tpls/pybind11/build" && cd "tpls/pybind11/build"
+      cmake -G Ninja ../ -DCMAKE_INSTALL_PREFIX="$PYBIND11_INSTALL_PREFIX" -DPYBIND11_TEST=False
+      cmake --build . --target install --config Release
+    fi
   fi
 fi
 
@@ -99,7 +106,14 @@ fi
 # if they were already applied previously.
 LLVM_CMAKE_PATCHES=${LLVM_CMAKE_PATCHES:-"$this_file_dir/../tpls/customizations/llvm"}
 if [ -d "$LLVM_CMAKE_PATCHES" ]; then 
-  cd "$LLVM_SOURCE" && git checkout -f $llvm_commit
+  cd "$LLVM_SOURCE"
+  # Only force-checkout if the tree is at a different commit or dirty.
+  # Avoid force-checkout when already at the right commit to preserve
+  # file timestamps for incremental builds with cached object files.
+  current_commit=$(git rev-parse HEAD 2>/dev/null || echo "")
+  if [ "$current_commit" != "$llvm_commit" ]; then
+    git checkout -f $llvm_commit
+  fi
   echo "Applying LLVM patches in $LLVM_CMAKE_PATCHES..."
   for patch in `find "$LLVM_CMAKE_PATCHES"/* -maxdepth 0 -type f -name '*.diff'`; do
     # Check if patch is already applied.
@@ -160,9 +174,24 @@ if [ -z "${llvm_projects##*flang;*}" ]; then
 fi
 if [ -z "${llvm_projects##*openmp;*}" ]; then
   echo "- including OpenMP components"
-  # LLVM 22+ requires OpenMP to be built as a runtime, not a project.
-  # OpenMP is built/installed via ninja install-runtimes in the runtimes section.
+  # LLVM 22+ removed support for building OpenMP as a project build as runtime.
   llvm_runtimes+="openmp;"
+  if [[ "${llvm_runtimes}" != *"compiler-rt;"* ]]; then
+    echo "- adding compiler-rt builtins (required by OpenMP runtime build)"
+    llvm_runtimes+="compiler-rt;"
+    # Only build builtins as sanitizers, profilers, etc. are not needed
+    # and their cmake defaults would add significant build time.
+    openmp_compiler_rt_args=" \
+      -DCOMPILER_RT_BUILD_BUILTINS=ON \
+      -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+      -DCOMPILER_RT_BUILD_XRAY=OFF \
+      -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+      -DCOMPILER_RT_BUILD_PROFILE=OFF \
+      -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+      -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF \
+      -DCOMPILER_RT_BUILD_ORC=OFF \
+      -DCOMPILER_RT_BUILD_CRT=OFF"
+  fi
   llvm_projects="${llvm_projects//openmp;/}"
   projects=("${projects[@]/openmp}")
 fi
@@ -192,19 +221,6 @@ if [ "$(echo ${projects[@]} | xargs)" != "" ]; then
   install_targets="install $install_targets"
 else 
   install_targets="install-distribution-stripped $install_targets"
-  if [ -n "$mlir_python_bindings" ]; then
-    # Cherry-pick the necessary commit to have a distribution target
-    # for the mlir-python-sources; to be removed after we update to LLVM 17.
-    echo "Cherry-picking commit 9494bd84df3c5b496fc087285af9ff40d7859b6a"
-    git cherry-pick --no-commit 9494bd84df3c5b496fc087285af9ff40d7859b6a
-    if [ ! 0 -eq $? ]; then
-      echo "Cherry-pick failed."
-      if $(git rev-parse --is-shallow-repository); then
-        echo "Unshallow the repository and try again."
-        (return 0 2>/dev/null) && return 1 || exit 1
-      fi
-    fi
-  fi
 fi
 
 # A hack, since otherwise the build can fail due to line endings in the LLVM script:
@@ -228,7 +244,8 @@ cmake_args=" \
   -DPython3_EXECUTABLE='"$Python3_EXECUTABLE"' \
   -DMLIR_ENABLE_BINDINGS_PYTHON=$mlir_python_bindings \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DCMAKE_CXX_FLAGS='-w'"
+  -DCMAKE_CXX_FLAGS='-w' \
+  ${openmp_compiler_rt_args:-}"
 
 if [ -z "$LLVM_CMAKE_CACHE" ]; then 
   LLVM_CMAKE_CACHE=`find "$this_file_dir/.." -path '*/cmake/caches/*' -name LLVM.cmake`
@@ -272,22 +289,6 @@ if [ "$status" = "" ] || [ ! "$status" -eq "0" ]; then
   cd "$working_dir" && (return 0 2>/dev/null) && return 1 || exit 1
 else
   cp bin/llvm-lit "$LLVM_INSTALL_PREFIX/bin/"
-fi
-
-# Install libomp if OpenMP was built (no standard install target exists for distribution builds)
-if [ -n "$(echo $install_targets | grep omp)" ]; then
-  echo "Installing OpenMP runtime (libomp)..."
-  # LLVM 22+ builds OpenMP as a runtime (under runtimes/) rather than a project (under projects/).
-  omp_install_cmake="runtimes/openmp/runtime/src/cmake_install.cmake"
-  if [ ! -f "$omp_install_cmake" ]; then
-    omp_install_cmake="projects/openmp/runtime/src/cmake_install.cmake"
-  fi
-  if $verbose; then
-    cmake -P "$omp_install_cmake"
-  else
-    cmake -P "$omp_install_cmake" \
-      2>> "$llvm_log_dir/ninja_error.txt" 1>> "$llvm_log_dir/ninja_output.txt"
-  fi
 fi
 
 # Build and install runtimes using the newly built toolchain.
