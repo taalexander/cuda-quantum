@@ -237,11 +237,28 @@ if [ -f "${LLVM_INSTALL_PREFIX}/bin/ld.lld" ]; then
   cp -a "${LLVM_INSTALL_PREFIX}/bin/ld.lld" cuda_quantum_assets/cudaq/bin/
 fi
 
-# Merge LLVM libs into CUDAQ lib/ (libomp, clang resource dir)
+# Merge LLVM libs into CUDAQ lib/ (libc++, libomp, clang resource dir).
+# Also search <triple>/ subdirs for per-target runtime builds (LLVM_ENABLE_PER_TARGET_RUNTIME_DIR).
+cp -a "${LLVM_INSTALL_PREFIX}/lib/libc++"* cuda_quantum_assets/cudaq/lib/ 2>/dev/null || true
+cp -a "${LLVM_INSTALL_PREFIX}/lib/"*/libc++* cuda_quantum_assets/cudaq/lib/ 2>/dev/null || true
 cp -a "${LLVM_INSTALL_PREFIX}/lib/libomp"* cuda_quantum_assets/cudaq/lib/ 2>/dev/null || true
+cp -a "${LLVM_INSTALL_PREFIX}/lib/"*/libomp* cuda_quantum_assets/cudaq/lib/ 2>/dev/null || true
 if [ -d "${LLVM_INSTALL_PREFIX}/lib/clang" ]; then
   cp -a "${LLVM_INSTALL_PREFIX}/lib/clang" cuda_quantum_assets/cudaq/lib/
 fi
+
+# Merge C++ stdlib headers so clang++ can find <cstddef>, <cmath>, etc.
+if [ -d "${LLVM_INSTALL_PREFIX}/include/c++/v1" ]; then
+  mkdir -p cuda_quantum_assets/cudaq/include/c++
+  cp -a "${LLVM_INSTALL_PREFIX}/include/c++/v1" cuda_quantum_assets/cudaq/include/c++/
+fi
+# Per-target header layout: include/<triple>/c++/v1/
+for d in "${LLVM_INSTALL_PREFIX}/include/"*/c++/v1; do
+  [ -d "$d" ] || continue
+  triple="$(basename "$(dirname "$(dirname "$d")")")"
+  mkdir -p "cuda_quantum_assets/cudaq/include/${triple}/c++"
+  cp -a "$d" "cuda_quantum_assets/cudaq/include/${triple}/c++/"
+done
 
 # Merge cuQuantum/cuTensor libs and headers.
 # Try both lib64/ and lib/ since different distros use different conventions;
