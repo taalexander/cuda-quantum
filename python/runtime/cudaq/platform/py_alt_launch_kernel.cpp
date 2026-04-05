@@ -849,7 +849,12 @@ py::object cudaq::marshal_and_launch_module(const std::string &name,
   auto mod = unwrap(module);
   Type retTy = cudaq::runtime::getReturnType(kernelFunc);
   auto args = marshal_arguments_for_module_launch(mod, runtimeArgs, kernelFunc);
-  [[maybe_unused]] auto resultPtr = clean_launch_module(name, mod, args);
+
+  {
+    // Only C++ from here (MLIR compilation + JIT), safe to release the GIL.
+    py::gil_scoped_release release;
+    [[maybe_unused]] auto resultPtr = clean_launch_module(name, mod, args);
+  }
   // FIXME: handle dynamic sized results!
 
   if (!retTy)
