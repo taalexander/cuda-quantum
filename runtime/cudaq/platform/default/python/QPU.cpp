@@ -25,6 +25,7 @@
 #include "cudaq_internal/compiler/ArgumentConversion.h"
 #include "cudaq_internal/compiler/JIT.h"
 #include "cudaq_internal/compiler/RuntimeMLIR.h"
+#include "runtime/cudaq/platform/PythonSignalCheck.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Export.h"
@@ -47,6 +48,7 @@ specializeKernel(const std::string &name, ModuleOp module,
                  bool enablePythonCodegenDump = false, bool isEntryPoint = true,
                  const std::unordered_set<unsigned> &varArgIndices = {}) {
   PassManager pm(module.getContext());
+  cudaq::addPythonSignalInstrumentation(pm);
   ArgumentConverter argCon(name, module);
   if (varArgIndices.empty())
     argCon.gen(name, module, rawArgs);
@@ -107,7 +109,7 @@ specializeKernel(const std::string &name, ModuleOp module,
     pm.enableIRPrinting();
   }
   if (failed(pm.run(module)))
-    throw std::runtime_error("Could not successfully apply argument synth.");
+    throw std::runtime_error("Pass pipeline failed.");
 }
 
 /// Replace %KEY% and %KEY:default% placeholders in a pipeline string with
@@ -173,6 +175,7 @@ static void runTargetPassPipeline(ModuleOp module) {
   if (enablePrintEachPass || disableThreading)
     ctx->disableMultithreading();
   PassManager pm(ctx);
+  cudaq::addPythonSignalInstrumentation(pm);
   if (enablePrintEachPass)
     pm.enableIRPrinting();
   std::string errMsg;
@@ -180,7 +183,7 @@ static void runTargetPassPipeline(ModuleOp module) {
   if (failed(parsePassPipeline(pipeline, pm, errOS)))
     throw std::runtime_error("Failed to parse target pipeline: " + errMsg);
   if (failed(pm.run(module)))
-    throw std::runtime_error("Target pass pipeline failed.");
+    throw std::runtime_error("Pass pipeline failed.");
 }
 
 /// Lowers \p module to LLVM code. The LLVM code will use "full QIR" as the
@@ -196,11 +199,12 @@ std::string cudaq::detail::lower_to_qir_llvm(const std::string &name,
   specializeKernel(name, module, args.getArgs());
   runTargetPassPipeline(module);
   PassManager pm(module.getContext());
+  cudaq::addPythonSignalInstrumentation(pm);
   cudaq::opt::addAggressiveInlining(pm);
   cudaq::opt::createTargetFinalizePipeline(pm);
   cudaq::opt::addAOTPipelineConvertToQIR(pm, format);
   if (failed(pm.run(module)))
-    throw std::runtime_error("Conversion to " + format + " failed.");
+    throw std::runtime_error("Pass pipeline failed.");
   if (failed(cudaq::verifier::checkQIRLLVMIRDialect(module, format)))
     throw std::runtime_error("QIR conformance failed.");
   llvm::LLVMContext llvmContext;
@@ -229,6 +233,7 @@ std::string cudaq::detail::lower_to_openqasm(const std::string &name,
   runTargetPassPipeline(module);
   auto *ctx = module.getContext();
   PassManager pm(ctx);
+  cudaq::addPythonSignalInstrumentation(pm);
   cudaq::opt::createTargetFinalizePipeline(pm);
   cudaq::opt::createPipelineTransformsForPythonToOpenQASM(pm);
   cudaq::opt::addPipelineTranslateToOpenQASM(pm);
@@ -239,7 +244,7 @@ std::string cudaq::detail::lower_to_openqasm(const std::string &name,
     pm.enableIRPrinting();
   }
   if (failed(pm.run(module)))
-    throw std::runtime_error("Conversion to OpenQASM failed.");
+    throw std::runtime_error("Pass pipeline failed.");
   std::string result;
   llvm::raw_string_ostream os(result);
   if (failed(cudaq::translateToOpenQASM(module, os)))
