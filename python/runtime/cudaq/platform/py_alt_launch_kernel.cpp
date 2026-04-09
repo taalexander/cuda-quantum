@@ -852,7 +852,9 @@ py::object cudaq::marshal_and_launch_module(const std::string &name,
   auto args = marshal_arguments_for_module_launch(mod, runtimeArgs, kernelFunc);
 
   {
-    // Only C++ from here (MLIR compilation + JIT), safe to release the GIL.
+    // Release the GIL for MLIR compilation + JIT. This allows Python signal
+    // handling (Ctrl-C) via addPythonSignalInstrumentation which uses
+    // PyGILState_Ensure from the compilation thread.
     py::gil_scoped_release release;
     [[maybe_unused]] auto resultPtr = clean_launch_module(name, mod, args);
   }

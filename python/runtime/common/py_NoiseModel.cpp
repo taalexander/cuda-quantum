@@ -133,6 +133,7 @@ void bindNoiseModel(py::module &mod) {
             auto key = py::hash(krausT);
             std::function<kraus_channel(const std::vector<double> &)> lambda =
                 [krausT](const std::vector<double> &p) -> kraus_channel {
+              py::gil_scoped_acquire acquire;
               return krausT(p).cast<kraus_channel>();
             };
             self.register_channel(key, lambda);
