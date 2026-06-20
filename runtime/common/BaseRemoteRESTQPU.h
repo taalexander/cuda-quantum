@@ -496,7 +496,6 @@ public:
       context.warnedNamedMeasurements = policy.warnedNamedMeasurements;
       sample_policy localPolicy;
       localPolicy.options.shots = localShots;
-      localPolicy.reorderIdx = std::move(codes[i].mapping_reorder_idx);
       localPolicy.kernelName = kernelName;
       assert(codes[i].jit);
       auto result = detail::with_policy_and_ctx(localPolicy, context, [&]() {
@@ -555,7 +554,6 @@ public:
       // Avoid emitting the warning again during execution
       sample_policy localPolicy;
       localPolicy.options.shots = localShots;
-      localPolicy.reorderIdx = std::move(codes[i].mapping_reorder_idx);
       localPolicy.kernelName = kernelName;
       assert(codes[i].jit);
       auto result = detail::with_policy_and_ctx(localPolicy, context, [&]() {

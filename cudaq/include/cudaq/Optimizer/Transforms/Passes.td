@@ -967,7 +967,7 @@ def MappingFunc: Pass<"qubit-mapping-func", "mlir::func::FuncOp"> {
            "used is max(min-stall-swap-budget, stall-swap-budget-per-qubit * "
            "numQubits) (advanced)">,
     Option<"placement", "placement", "std::string",
-           /*default=*/"\"auto\"",
+           /*default=*/"\"identity\"",
            "Initial placement strategy: auto (propose identity and greedy "
            "seeds, select by routed swap count), identity, greedy">,
     Option<"search", "search", "std::string", /*default=*/"\"sabre\"",

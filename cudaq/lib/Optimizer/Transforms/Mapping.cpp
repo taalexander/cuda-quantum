@@ -1572,10 +1572,10 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
         return;
       }
       func.emitWarning("unknown qubit-mapping placement strategy '" +
-                       this->placement + "'; using 'auto'");
+                       this->placement + "'; using 'identity'");
     }
     PlacementStrategy placementStrategy =
-        parsedPlacement.value_or(PlacementStrategy::Auto);
+        parsedPlacement.value_or(PlacementStrategy::Identity);
 
     std::optional<SearchStrategy> parsedSearch =
         parseSearchStrategy(this->search);
