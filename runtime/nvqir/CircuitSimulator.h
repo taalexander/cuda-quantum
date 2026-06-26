@@ -13,6 +13,7 @@
 #include "common/ExecutionContext.h"
 #include "common/NoiseModel.h"
 #include "common/QuditIdTracker.h"
+#include "common/ResultReconstruction.h"
 #include "common/SampleResult.h"
 #include "common/Timing.h"
 #include "cudaq/algorithms/policies.h"
@@ -1141,12 +1142,27 @@ protected:
       internalResult.append(counts);
     }
 
-    // Reorder the global register (if necessary). This might be necessary if
-    // the mapping pass had run and we want to undo the shuffle that occurred
-    // during mapping.
-    if (!policy.reorderIdx.empty()) {
-      internalResult.reorder(policy.reorderIdx);
-      policy.reorderIdx.clear();
+    if (!policy.resultOutputMap.outputs.empty()) {
+      // Kernels compiled with a result-to-output map go through the QIR
+      // mapping pipeline, which encodes all measurement outputs as flat
+      // bitstrings or local-measurement counts.  That pipeline does not
+      // generate mid-circuit named registers that are structurally independent
+      // of the map, so internalResult at this point contains only the global
+      // register (either as sequential bitstrings or as a counts dictionary).
+      // The reconstruction below replaces internalResult wholesale; any named
+      // registers accumulated before this point would be dropped.  Mapped
+      // kernels must not produce such registers: the map supersedes all
+      // per-register accumulation done in flushAnySamplingTasks.
+      assert(internalResult.register_names().size() <= 1 &&
+             "mapped kernel produced named registers outside the execution "
+             "result map; the reconstruction would drop them");
+      auto sequentialData = internalResult.sequential_data();
+      if (!sequentialData.empty())
+        internalResult = cudaq::reconstructSampleResultFromFlatBitstringShots(
+            sequentialData, policy.resultOutputMap);
+      else
+        internalResult = cudaq::reconstructSampleResultFromLocalMeasurements(
+            internalResult.to_map(), policy.resultOutputMap);
     }
 
     // Clear the sample bits for the next run
