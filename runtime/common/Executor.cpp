@@ -50,9 +50,13 @@ detail::future Executor::execute(std::vector<KernelExecution> &codesToExecute,
     CUDAQ_INFO("Task ID is {}", task_id);
     ids.emplace_back(task_id, codesToExecute[i].name);
     config["output_names." + task_id] = codesToExecute[i].output_names->dump();
-
-    nlohmann::json jReorder = codesToExecute[i].mapping_reorder_idx;
-    config["reorderIdx." + task_id] = jReorder.dump();
+    // Additive sidecar: the active device qubits used by this emitted
+    // execution, populated only when mapping ran. Unlike output_names, this
+    // includes unmeasured ancillas and mapper-introduced wires.
+    const auto &activeDeviceQubits = codesToExecute[i].activeDeviceQubits;
+    if (!activeDeviceQubits.empty())
+      config["active_device_qubits." + task_id] =
+          nlohmann::json(activeDeviceQubits).dump();
 
     i++;
   }
