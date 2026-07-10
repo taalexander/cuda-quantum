@@ -39,6 +39,7 @@ set(CUDAQ_RUNTIME_TEST_SOURCES
   common/CompiledModuleTester.cpp
   ptsbe/PTSBESampleTester.cpp
   ptsbe/PTSBEMultiBackendTester.cpp
+  ptsbe/McmReplayTester.cpp
   integration/tracer_tester.cpp
   integration/gate_library_tester.cpp
   integration/analysis_scope_tester.cpp
@@ -345,6 +346,8 @@ add_executable(test_ptsbe ${CUDAQ_GTEST_MAIN}
   ptsbe/PTSBEInterfaceTester.cpp
   ptsbe/TraceConversionTester.cpp
   ptsbe/MergeTasksWithTrajectoryTester.cpp
+  ptsbe/McmTraceTester.cpp
+  ptsbe/McmReplayTester.cpp
   ptsbe/ExecutePTSBETester.cpp
   ptsbe/PTSSamplingStrategyTester.cpp
   ptsbe/NoiseExtractorTester.cpp

@@ -24,6 +24,7 @@ enum class TraceInstructionType {
   Gate,
   Noise,
   Measurement,
+  Reset,
 };
 
 /// @brief A trace is a circuit representation of the executed computation, as
@@ -32,9 +33,10 @@ enum class TraceInstructionType {
 /// flow, the trace of a kernel with control flow represents a single execution
 /// path, and thus two calls to the same kernel might produce traces.
 ///
-/// Instructions are typed (Gate or Noise). Noise instructions represent
-/// apply_noise; the channel is resolved via noise_model::get_channel(
-/// noise_channel_key, `params`).
+/// Instructions are typed (Gate, Noise, Measurement, or Reset). Noise
+/// instructions represent apply_noise; the channel is resolved via
+/// noise_model::get_channel(noise_channel_key, `params`). Measurement and
+/// Reset instructions record mid-circuit measurements and qubit resets.
 class Trace {
 public:
   struct Instruction {
@@ -73,6 +75,9 @@ public:
   void
   appendMeasurement(std::string_view name, std::vector<QuditInfo> targets,
                     std::optional<std::string> register_name = std::nullopt);
+
+  /// @brief Append a qubit reset instruction to the trace.
+  void appendReset(std::vector<QuditInfo> targets);
 
   auto getNumQudits() const { return numQudits; }
 

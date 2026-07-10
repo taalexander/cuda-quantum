@@ -17,9 +17,18 @@
 /// `ptsbe::sample()` returns `ptsbe::sample_result` (subclass of
 /// `cudaq::sample_result`) which may optionally carry execution data.
 ///
+/// Mid-circuit measurement and reset are traced and validated: measure/reset
+/// sites carry record indices, and measure-then-reset pairs are fused into
+/// MeasureReset sites.
+///
 /// Limitations:
-/// - PTSBE does not support mid-circuit measurements (MCM)
-/// - Dynamic circuits with conditional logic are rejected
+/// - Traces with mid-circuit measurement or reset always run on the generic
+///   site-ordered per-shot replay path; batched executors handle
+///   terminal-only traces until batched mid-circuit replay lands
+/// - Dynamic circuits (conditional feedback on measurement outcomes, per the
+///   kernel's MLIR metadata) are rejected
+/// - C++ library-mode kernels with host-side feedback (e.g. `if (mz(q))`)
+///   are not detectable by tracing; a single branch is traced silently
 /// - Supports only unitary mixture noise
 ///
 
@@ -47,12 +56,14 @@ namespace cudaq::ptsbe::detail {
 
 /// @brief Validate kernel eligibility for PTSBE execution
 ///
-/// Checks all constraints required for PTSBE trajectory-based simulation:
-/// - No conditional feedback on measurement results (dynamic circuits) or
-/// mid-circuit measurements
+/// Rejects dynamic circuits: kernels whose MLIR metadata flags conditional
+/// feedback on measurement outcomes. Mid-circuit measurements (named or
+/// unnamed) and resets are accepted. C++ library-mode host feedback is not
+/// visible to this check; such kernels trace a single branch silently.
 ///
 /// @param kernelName Name of the kernel being validated
-/// @param ctx ExecutionContext populated after kernel tracing
+/// @param ctx ExecutionContext populated after kernel tracing (unused;
+///        retained for call-site stability)
 /// @throws std::runtime_error if kernel is not eligible for PTSBE
 void validatePTSBEKernel(const std::string &kernelName,
                          const ExecutionContext &ctx);
@@ -70,20 +81,30 @@ void validatePTSBEPreconditions(
 
 /// @brief Build the PTSBE instruction sequence from a raw cudaq::Trace.
 ///
-/// @param trace Raw circuit trace (may contain Gate, Noise, and Measurement)
+/// Converts Gate, Noise, Measurement, and Reset entries, then fuses each
+/// Measurement whose next instruction touching its qubits is a Reset on the
+/// same targets into a MeasureReset site, and finally assigns dense record
+/// indices in trace order to every Measurement and MeasureReset instruction.
+///
+/// @param trace Raw circuit trace
 /// @param noise_model Noise model used to resolve inline apply_noise channels
 /// @return PTSBETrace with resolved channels for Noise entries
 [[nodiscard]] PTSBETrace buildPTSBETrace(const cudaq::Trace &trace,
                                          const cudaq::noise_model &noise_model);
 
-/// @brief Extract measured qubit IDs from the trace's Measurement entries.
+/// @brief Extract measured qubit IDs from the trace's measurement entries.
 ///
-/// Scans the trace for Measurement instructions and collects their target
-/// qubit IDs in the order they first appear. Duplicates are suppressed so
-/// each qubit appears at most once while preserving the kernel's measurement
-/// ordering.
+/// Scans the trace for Measurement and MeasureReset instructions and collects
+/// their target qubit IDs in the order they first appear. Duplicates are
+/// suppressed so each qubit appears at most once while preserving the
+/// kernel's measurement ordering. MeasureReset sites are included so that a
+/// TERMINAL measure-then-reset still records its bit: replay never applies
+/// the trailing reset, and sampling the un-reset state yields exactly the
+/// measurement outcome. Mid-circuit MeasureReset sites never reach terminal
+/// sampling: dispatch routes mid-circuit traces to per-shot replay, which
+/// collapses and records every measuring site directly.
 ///
-/// @param trace PTSBE trace containing Gate, Noise, and Measurement entries
+/// @param trace PTSBE trace
 /// @return Ordered, de-duplicated vector of measured qubit indices
 std::vector<std::size_t>
 extractMeasureQubits(std::span<const TraceInstruction> trace);
@@ -169,7 +190,8 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 /// @tparam KernelFunctor Wrapped kernel functor type
 /// @param wrappedKernel Functor that invokes the quantum kernel
 /// @param platform Reference to the quantum platform
-/// @param kernelName Name of the kernel (for diagnostics and MCM detection)
+/// @param kernelName Name of the kernel (for diagnostics and conditional
+///        feedback detection)
 /// @param shots Number of shots for trajectory allocation
 /// @param options PTSBE configuration options
 /// @return ptsbe::sample_result with optional execution data
@@ -208,9 +230,10 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
     executionData->instructions = ptsbeTrace;
   }
 
-  // Stage 3: Build PTSBatch with trajectory generation and shot allocation
+  // Stage 3: Build PTSBatch with trajectory generation and shot allocation.
+  // buildPTSBatchFromTrace sets includeSequentialData from the options,
+  // forcing it on when the trace has mid-circuit measurement.
   auto batch = buildPTSBatchFromTrace(std::move(ptsbeTrace), options, shots);
-  batch.includeSequentialData = options.include_sequential_data;
   cudaq::info("[ptsbe] Allocated {} shots across {} trajectories",
               batch.totalShots(), batch.trajectories.size());
 
@@ -246,7 +269,7 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
 /// @param kernel Quantum kernel to trace
 /// @param args Kernel arguments
 /// @return PTSBatch with trace, empty trajectories, and measureQubits
-/// @throws std::runtime_error if MCM detected
+/// @throws std::runtime_error if conditional feedback detected
 template <typename QuantumKernel, typename... Args>
 PTSBatch tracePTSBatch(QuantumKernel &&kernel, Args &&...args) {
   ExecutionContext traceCtx("tracer");
@@ -278,7 +301,8 @@ using async_sample_result = std::future<sample_result>;
 /// @tparam KernelFunctor Wrapped kernel functor type
 /// @param wrappedKernel Functor that invokes the quantum kernel
 /// @param platform Reference to the quantum platform
-/// @param kernelName Name of the kernel (for diagnostics and MCM detection)
+/// @param kernelName Name of the kernel (for diagnostics and conditional
+///        feedback detection)
 /// @param shots Number of shots for trajectory allocation
 /// @param options PTSBE configuration options
 /// @param qpu_id The QPU ID to execute on

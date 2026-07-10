@@ -451,10 +451,13 @@ boxes_from_trace(const Trace &trace) {
   std::vector<std::unique_ptr<Diagram::Operator>> boxes;
   boxes.reserve(std::distance(trace.begin(), trace.end()));
 
-  // same iteration order as in layers_from_trace
+  // Same iteration order as in layers_from_trace. Non-gate instructions get a
+  // null placeholder so that layer refs (full-trace indices) stay aligned.
   for (const auto &inst : trace) {
-    if (inst.type != cudaq::TraceInstructionType::Gate)
+    if (inst.type != cudaq::TraceInstructionType::Gate) {
+      boxes.push_back(nullptr);
       continue;
+    }
 
     std::vector<Diagram::Wire> wires = convertToIDs(inst.targets);
     std::sort(wires.begin(), wires.end());
@@ -500,6 +503,8 @@ std::string string_diagram_from_trace(const Trace &trace,
   std::vector<int> layer_width(layers.size(), 0);
   // set the width of the layers
   for (size_t ref = 0; ref < boxes.size(); ++ref) {
+    if (!boxes[ref])
+      continue;
     // find the layer where the box is through ref
     auto layer_it =
         std::find_if(layers.begin(), layers.end(), [&ref](auto &layer) {
@@ -542,7 +547,8 @@ std::string string_diagram_from_trace(const Trace &trace,
 
   // Draw boxes
   for (auto const &box : boxes) {
-    box->draw(diagram);
+    if (box)
+      box->draw(diagram);
   }
 
   std::string str;

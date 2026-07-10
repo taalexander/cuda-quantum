@@ -41,6 +41,14 @@ struct PTSBEOptions {
   /// defaults to the number of shots.
   std::optional<std::size_t> max_trajectories = std::nullopt;
 
+  /// Maximum shots executed per batch slot. Capping the slot size splits a
+  /// trajectory's shots across slots so their measurement records stay
+  /// decorrelated. When `nullopt` (default), selected automatically: 1 when
+  /// the trace contains mid-circuit measurement or reset, unlimited
+  /// otherwise. An explicit 0 forces unlimited. The environment variable
+  /// `CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT` takes precedence over this option.
+  std::optional<std::size_t> max_shots_per_slot = std::nullopt;
+
   /// Custom sampling strategy. If `nullptr`, uses default strategy.
   std::shared_ptr<PTSSamplingStrategy> strategy = nullptr;
 

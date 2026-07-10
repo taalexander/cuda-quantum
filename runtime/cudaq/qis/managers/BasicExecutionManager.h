@@ -269,8 +269,11 @@ public:
   }
 
   void reset(const QuditInfo &target) override {
-    if (isInTracerMode())
+    if (isInTracerMode()) {
+      synchronize();
+      cudaq::getExecutionContext()->kernelTrace.appendReset({target});
       return;
+    }
     // We hit a reset, need to exec / clear instruction queue
     synchronize();
     resetQudit(target);

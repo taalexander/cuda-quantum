@@ -13,6 +13,7 @@
 #include "cudaq/algorithms/draw.h"
 #include "cudaq/operators/matrix.h"
 #include <iostream>
+#include <stdexcept>
 
 namespace cudaq::contrib {
 
@@ -118,6 +119,10 @@ inline complex_matrix unitary_from_trace(const Trace &trace) {
   complex_matrix U = complex_matrix::identity(dim);
 
   for (const auto &inst : trace) {
+    if (inst.type == TraceInstructionType::Reset)
+      throw std::runtime_error(
+          "unitary_from_trace: kernel contains a qubit reset, which is not a "
+          "unitary operation");
     auto gate_name = nvqir::getGateNameFromString(inst.name);
     auto gate_vec = nvqir::getGateByName<double>(gate_name, inst.params);
     std::size_t gate_dim = static_cast<std::size_t>(std::sqrt(gate_vec.size()));

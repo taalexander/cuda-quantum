@@ -39,16 +39,15 @@ using namespace cudaq;
 // nanobind 2.x cannot dispatch NB_TYPE_CASTER-based parameters (MlirModule)
 // when nanobind::object appears in the same function signature. Use concrete
 // std::optional types for all nullable parameters instead.
-static ptsbe::sample_result
-pySamplePTSBE(const std::string &shortName, MlirModule module,
-              cudaq::CompiledModule *compiled, std::size_t shots_count,
-              noise_model noiseModel,
-              std::optional<std::size_t> max_trajectories,
-              std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
-                  sampling_strategy,
-              std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
-              bool return_execution_data, bool include_sequential_data,
-              nanobind::args runtimeArgs) {
+static ptsbe::sample_result pySamplePTSBE(
+    const std::string &shortName, MlirModule module,
+    cudaq::CompiledModule *compiled, std::size_t shots_count,
+    noise_model noiseModel, std::optional<std::size_t> max_trajectories,
+    std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
+        sampling_strategy,
+    std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
+    bool return_execution_data, bool include_sequential_data,
+    std::optional<std::size_t> max_shots_per_slot, nanobind::args runtimeArgs) {
   if (shots_count == 0)
     return ptsbe::sample_result();
 
@@ -56,6 +55,7 @@ pySamplePTSBE(const std::string &shortName, MlirModule module,
   ptsbe_options.return_execution_data = return_execution_data;
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
+  ptsbe_options.max_shots_per_slot = max_shots_per_slot;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -111,20 +111,20 @@ struct AsyncPTSBESampleResultImpl {
 } // namespace
 
 /// @brief Run PTSBE sampling asynchronously from Python.
-static AsyncPTSBESampleResultImpl
-pySampleAsyncPTSBE(const std::string &shortName, MlirModule module,
-                   std::size_t shots_count, noise_model &noiseModel,
-                   std::optional<std::size_t> max_trajectories,
-                   std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
-                       sampling_strategy,
-                   std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
-                   bool return_execution_data, bool include_sequential_data,
-                   nanobind::args runtimeArgs) {
+static AsyncPTSBESampleResultImpl pySampleAsyncPTSBE(
+    const std::string &shortName, MlirModule module, std::size_t shots_count,
+    noise_model &noiseModel, std::optional<std::size_t> max_trajectories,
+    std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
+        sampling_strategy,
+    std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
+    bool return_execution_data, bool include_sequential_data,
+    std::optional<std::size_t> max_shots_per_slot, nanobind::args runtimeArgs) {
 
   ptsbe::PTSBEOptions ptsbe_options;
   ptsbe_options.return_execution_data = return_execution_data;
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
+  ptsbe_options.max_shots_per_slot = max_shots_per_slot;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -233,6 +233,8 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
       .value("Gate", ptsbe::TraceInstructionType::Gate)
       .value("Noise", ptsbe::TraceInstructionType::Noise)
       .value("Measurement", ptsbe::TraceInstructionType::Measurement)
+      .value("Reset", ptsbe::TraceInstructionType::Reset)
+      .value("MeasureReset", ptsbe::TraceInstructionType::MeasureReset)
       .export_values();
 
   // Trace instruction
@@ -263,6 +265,19 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
                        return nanobind::none();
                      return nanobind::cast(*self.channel);
                    })
+      .def_prop_ro(
+          "record_index",
+          [](const ptsbe::TraceInstruction &self) { return self.record_index; },
+          "Position of this instruction's bit in the per-shot measurement "
+          "record. Set for Measurement and MeasureReset instructions, None "
+          "otherwise.")
+      .def_prop_ro(
+          "register_name",
+          [](const ptsbe::TraceInstruction &self) {
+            return self.register_name;
+          },
+          "Measurement register name from the kernel, or None for unnamed "
+          "measurements and non-measurement instructions.")
       .def("__repr__", [](const ptsbe::TraceInstruction &self) {
         return "TraceInstruction(" + self.name + " on " +
                std::to_string(self.targets.size()) + " qubits)";
@@ -409,6 +424,7 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
             nanobind::arg("shot_allocation").none(),
             nanobind::arg("return_execution_data"),
             nanobind::arg("include_sequential_data"),
+            nanobind::arg("max_shots_per_slot").none(),
             nanobind::arg("arguments"),
             R"pbdoc(
 Run PTSBE sampling on the provided kernel.
@@ -423,6 +439,10 @@ Args:
   shot_allocation: Shot allocation strategy or None for default (proportional).
   return_execution_data: Whether to include execution data in the result.
   include_sequential_data: Whether to populate per-shot sequential data.
+  max_shots_per_slot: Maximum shots per batch slot. None selects
+    automatically (1 with mid-circuit measurement or reset, unlimited
+    otherwise); 0 forces unlimited. The environment variable
+    CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT takes precedence.
   *arguments: The kernel arguments.
 
 Returns:
@@ -437,7 +457,8 @@ Returns:
       nanobind::arg("sampling_strategy").none(),
       nanobind::arg("shot_allocation").none(),
       nanobind::arg("return_execution_data"),
-      nanobind::arg("include_sequential_data"), nanobind::arg("arguments"),
+      nanobind::arg("include_sequential_data"),
+      nanobind::arg("max_shots_per_slot").none(), nanobind::arg("arguments"),
       "Run PTSBE sampling asynchronously. Returns an "
       "AsyncSampleResultImpl.");
 }
