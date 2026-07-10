@@ -283,6 +283,30 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
                std::to_string(self.targets.size()) + " qubits)";
       });
 
+  // Per-shot record site
+  nanobind::class_<ptsbe::RecordSite>(
+      ptsbe, "RecordSite",
+      "One bit of the per-shot measurement record: the measurement site that "
+      "produced the bit at position `record_index` in every sequential-data "
+      "string.")
+      .def_ro("record_index", &ptsbe::RecordSite::record_index,
+              "Position of this site's bit within each per-shot record.")
+      .def_ro("qubit", &ptsbe::RecordSite::qubit,
+              "Qubit measured at this site.")
+      .def_ro("resets", &ptsbe::RecordSite::resets,
+              "True when the site resets the qubit after measuring.")
+      .def_ro("terminal", &ptsbe::RecordSite::terminal,
+              "True when no later instruction touches the qubit.")
+      .def_ro("register_name", &ptsbe::RecordSite::register_name,
+              "Measurement register name from the kernel, or None for "
+              "unnamed measurements.")
+      .def("__repr__", [](const ptsbe::RecordSite &self) {
+        return "RecordSite(record_index=" + std::to_string(self.record_index) +
+               ", qubit=" + std::to_string(self.qubit) +
+               ", resets=" + (self.resets ? "True" : "False") +
+               ", terminal=" + (self.terminal ? "True" : "False") + ")";
+      });
+
   // Kraus selection (cudaq:: namespace)
   nanobind::class_<KrausSelection>(
       ptsbe, "KrausSelection",
@@ -405,7 +429,22 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
           "PTSBE execution data if return_execution_data was True, None "
           "otherwise.")
       .def("has_execution_data", &ptsbe::sample_result::has_execution_data,
-           "Check if execution data is available.");
+           "Check if execution data is available.")
+      .def_prop_ro(
+          "record_layout",
+          [](const ptsbe::sample_result &self)
+              -> std::vector<ptsbe::RecordSite> {
+            if (!self.has_record_layout())
+              return {};
+            return self.record_layout();
+          },
+          "Per-shot record layout as a list of RecordSite in record-index "
+          "order. With mid-circuit measurement, every get_sequential_data() "
+          "string is a fixed-width record with one bit per site, and counts "
+          "are distributions over full records. Empty when no layout was "
+          "produced.")
+      .def("has_record_layout", &ptsbe::sample_result::has_record_layout,
+           "Check if the per-shot record layout is available.");
 
   // Async PTSBE sample result wrapper
   nanobind::class_<AsyncPTSBESampleResultImpl>(

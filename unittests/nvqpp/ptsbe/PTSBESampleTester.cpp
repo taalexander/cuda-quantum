@@ -667,9 +667,12 @@ CUDAQ_TEST(PTSBESampleTest, NoiseCheckSimple) {
   EXPECT_EQ(result.get_total_shots(), 500);
   EXPECT_EQ(result.size(), 2);
 
+  // Without noise the trace has no noise sites; sampling runs a single
+  // identity trajectory and yields the ideal deterministic outcome.
   cudaq::noise_model emptyNoise;
   result = sample(emptyNoise, 500, xOp{});
-  EXPECT_EQ(result.size(), 0);
+  EXPECT_EQ(result.size(), 1);
+  EXPECT_EQ(result.count("1"), 500u);
 }
 
 // ============================================================================

@@ -352,7 +352,8 @@ add_executable(test_ptsbe ${CUDAQ_GTEST_MAIN}
   ptsbe/PTSBEPolicyTester.cpp
   ptsbe/PTSSamplingStrategyTester.cpp
   ptsbe/NoiseExtractorTester.cpp
-  ptsbe/TrajectoryDeduplicationTester.cpp)
+  ptsbe/TrajectoryDeduplicationTester.cpp
+  ptsbe/RecordLayoutTester.cpp)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)
   target_link_options(test_ptsbe PRIVATE -Wl,--no-as-needed)
 endif()
