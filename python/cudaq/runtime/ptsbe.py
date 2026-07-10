@@ -96,7 +96,8 @@ def sample(kernel,
           specifications, and per-trajectory measurement outcomes in the
           returned result. Defaults to ``False``.
       include_sequential_data (bool): Populate per-shot sequential bitstring
-          data on the result. Defaults to ``False``.
+          data on the result. Defaults to ``False``. Forced on when the
+          kernel contains mid-circuit measurement or reset.
       max_shots_per_path (int or ``None``): Maximum shots executed per batch
           slot. ``None`` (default) selects automatically: 1 when the kernel
           contains mid-circuit measurement or reset, unlimited otherwise.
@@ -106,6 +107,16 @@ def sample(kernel,
     Returns:
       ``SampleResult``: Measurement results. Returns a list of results
           in broadcast mode.
+
+    Record semantics with mid-circuit measurement:
+      Every measurement site (mid-circuit or terminal) contributes one bit
+      per measured qubit to a fixed-width per-shot record. Each
+      ``get_sequential_data()`` string is one full record in record-index
+      order, and the counts distribution is over full records rather than
+      terminal bits alone. ``result.record_layout`` lists one ``RecordSite``
+      per record bit with its ``record_index``, ``qubit``, ``resets`` and
+      ``terminal`` flags, and the kernel's measurement ``register_name``
+      when named.
 
     Raises:
       RuntimeError: If the kernel is invalid or arguments are invalid.
@@ -166,6 +177,9 @@ def sample_async(kernel,
           allocating shots across trajectories.
       return_execution_data (bool): Include execution data in the result.
       include_sequential_data (bool): Populate per-shot sequential data.
+          Forced on when the kernel contains mid-circuit measurement or
+          reset; see ``sample`` for the record semantics and
+          ``record_layout``.
       max_shots_per_path (int or ``None``): Maximum shots per batch slot.
           ``None`` selects automatically; 0 forces unlimited. The environment
           variable ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.

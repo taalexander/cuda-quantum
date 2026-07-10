@@ -48,4 +48,19 @@ void sample_result::set_execution_data(PTSBEExecutionData executionData) {
   executionData_ = std::move(executionData);
 }
 
+bool sample_result::has_record_layout() const {
+  return recordLayout_.has_value();
+}
+
+const std::vector<RecordSite> &sample_result::record_layout() const {
+  if (!recordLayout_.has_value())
+    throw std::runtime_error(
+        "PTSBE record layout not available on this result.");
+  return recordLayout_.value();
+}
+
+void sample_result::set_record_layout(std::vector<RecordSite> layout) {
+  recordLayout_ = std::move(layout);
+}
+
 } // namespace cudaq::ptsbe

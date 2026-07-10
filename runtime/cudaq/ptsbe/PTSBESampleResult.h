@@ -10,15 +10,42 @@
 
 #include "PTSBEExecutionData.h"
 #include "common/SampleResult.h"
+#include <cstddef>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace cudaq::ptsbe {
+
+/// @brief One bit of the per-shot measurement record.
+///
+/// Describes the measurement site that produced the bit at position
+/// `record_index` in every sequential-data string. Sites appear in
+/// record-index order, one per measured target qubit.
+struct RecordSite {
+  /// @brief Position of this site's bit within each per-shot record
+  std::size_t record_index;
+
+  /// @brief Qubit measured at this site
+  std::size_t qubit;
+
+  /// @brief True when the site resets the qubit after measuring (a fused
+  /// MeasureReset site)
+  bool resets;
+
+  /// @brief True when no later instruction in the trace touches the qubit
+  bool terminal;
+
+  /// @brief Measurement register name from the kernel, if named
+  std::optional<std::string> register_name;
+};
 
 /// @brief PTSBE-specific result type returned by `ptsbe::sample()`
 ///    which may contain execution data.
 class sample_result : public cudaq::sample_result {
 private:
   std::optional<PTSBEExecutionData> executionData_;
+  std::optional<std::vector<RecordSite>> recordLayout_;
 
 public:
   sample_result() = default;
@@ -38,6 +65,21 @@ public:
 
   /// @brief Attach execution data to this result
   void set_execution_data(PTSBEExecutionData executionData);
+
+  /// @brief Check if the per-shot record layout is available
+  bool has_record_layout() const;
+
+  /// @brief Get the per-shot record layout in record-index order.
+  ///
+  /// When the trace contains mid-circuit measurement, every sequential-data
+  /// string is a fixed-width record with one bit per layout site, and counts
+  /// are distributions over full records.
+  ///
+  /// @throws std::runtime_error if the record layout is not available
+  const std::vector<RecordSite> &record_layout() const;
+
+  /// @brief Attach the per-shot record layout to this result
+  void set_record_layout(std::vector<RecordSite> layout);
 };
 
 } // namespace cudaq::ptsbe

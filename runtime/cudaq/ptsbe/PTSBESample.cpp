@@ -78,6 +78,41 @@ extractMeasureQubits(std::span<const TraceInstruction> trace) {
   return qubits;
 }
 
+std::vector<RecordSite>
+buildRecordLayout(std::span<const TraceInstruction> trace) {
+  // Index of the last instruction touching each qubit, so the terminal flag
+  // is an O(1) lookup per site instead of a forward scan per site.
+  std::unordered_map<std::size_t, std::size_t> lastTouch;
+  for (std::size_t i = 0; i < trace.size(); ++i) {
+    for (auto q : trace[i].targets)
+      lastTouch[q] = i;
+    for (auto q : trace[i].controls)
+      lastTouch[q] = i;
+  }
+
+  std::vector<RecordSite> layout;
+  for (std::size_t i = 0; i < trace.size(); ++i) {
+    const auto &inst = trace[i];
+    if (inst.type != TraceInstructionType::Measurement &&
+        inst.type != TraceInstructionType::MeasureReset)
+      continue;
+    if (!inst.record_index)
+      throw std::runtime_error(
+          "PTSBE trace measurement site '" + inst.name + "' at position " +
+          std::to_string(i) +
+          " has no record_index; the trace was not built through "
+          "assignRecordIndices");
+    const std::size_t base = *inst.record_index;
+    const bool resets = inst.type == TraceInstructionType::MeasureReset;
+    for (std::size_t k = 0; k < inst.targets.size(); ++k) {
+      const auto qubit = inst.targets[k];
+      layout.push_back(
+          {base + k, qubit, resets, lastTouch[qubit] == i, inst.register_name});
+    }
+  }
+  return layout;
+}
+
 void cleanupTracerQubits(const Trace &kernelTrace) {
   auto numQubits = kernelTrace.getNumQudits();
   if (numQubits == 0)
@@ -356,6 +391,14 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
               strategy->name(), maxTrajs);
   batch.trajectories =
       strategy->generateTrajectories(noiseResult.noise_sites, maxTrajs);
+
+  // A noise-free trace has no noise sites, so strategies produce no
+  // trajectories. Execute it as one identity trajectory (probability 1, no
+  // Kraus selections) so sampling and per-shot records still run.
+  if (batch.trajectories.empty() && noiseResult.noise_sites.empty() &&
+      shots > 0)
+    batch.trajectories.push_back(
+        KrausTrajectory::builder().setId(0).setProbability(1.0).build());
 
   if (!batch.trajectories.empty() && shots > 0)
     allocateShots(batch.trajectories, shots, options.shot_allocation);

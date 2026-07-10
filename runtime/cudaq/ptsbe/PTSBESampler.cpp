@@ -347,16 +347,6 @@ std::vector<cudaq::sample_result> dispatchPTSBE(SimulatorType &sim,
   const bool forceGeneric =
       cudaq::getEnvBool("CUDAQ_PTSBE_FORCE_GENERIC", false);
 
-  // Batched executors replay gate tasks only and sample terminal
-  // measurements; dispatching a mid-circuit-measurement batch to them would
-  // silently skip collapse and reset. Route such batches to the generic
-  // site-ordered per-shot replay.
-  if (batch.hasMidCircuitMeasurement) {
-    cudaq::info("[ptsbe] Mid-circuit measurement or reset present: "
-                "dispatching to generic per-shot replay sampler");
-    return samplePTSBEGeneric(sim, batch);
-  }
-
   if (!forceGeneric) {
     auto *batchSim = dynamic_cast<BatchSimulator *>(&sim);
     if (batchSim) {

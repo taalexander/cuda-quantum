@@ -22,9 +22,6 @@
 /// MeasureReset sites.
 ///
 /// Limitations:
-/// - Traces with mid-circuit measurement or reset always run on the generic
-///   site-ordered per-shot replay path; batched executors handle
-///   terminal-only traces until batched mid-circuit replay lands
 /// - Dynamic circuits (conditional feedback on measurement outcomes, per the
 ///   kernel's MLIR metadata) are rejected
 /// - C++ library-mode kernels with host-side feedback (e.g. `if (mz(q))`)
@@ -69,6 +66,11 @@ void validatePTSBEKernel(const std::string &kernelName,
                          const ExecutionContext &ctx);
 
 /// @brief Warn if kernel uses named measurement registers.
+///
+/// Only call when per-shot records are unavailable (no sequential data). When
+/// records are produced, named registers are preserved as record-site names
+/// on the result's record layout and no warning is needed.
+///
 /// @param kernelName Name of the kernel being validated
 /// @param ctx ExecutionContext populated after kernel tracing
 /// @return True if a warning was emitted, false otherwise
@@ -108,6 +110,19 @@ void validatePTSBEPreconditions(
 /// @return Ordered, de-duplicated vector of measured qubit indices
 std::vector<std::size_t>
 extractMeasureQubits(std::span<const TraceInstruction> trace);
+
+/// @brief Build the per-shot record layout from a PTSBE trace.
+///
+/// Walks Measurement and MeasureReset instructions in trace order and emits
+/// one RecordSite per target qubit at record_index + k, mirroring how the
+/// replay paths write record bits. `resets` is true for MeasureReset sites;
+/// `terminal` is true when no later instruction in the trace touches the
+/// site's qubit; `register_name` carries the kernel's measurement name.
+///
+/// @param trace PTSBE trace with record indices assigned
+/// @return Record sites in record-index order
+[[nodiscard]] std::vector<RecordSite>
+buildRecordLayout(std::span<const TraceInstruction> trace);
 
 /// @brief Deallocate qubit IDs leaked by the tracer context on the simulator
 ///
@@ -219,10 +234,18 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
 
   // Stage 1: Validate kernel eligibility (no dynamic circuits)
   validatePTSBEKernel(kernelName, traceCtx);
-  warnNamedRegisters(kernelName, traceCtx);
 
   // Stage 2: Build PTSBE trace once, share between execution data and batch
   auto ptsbeTrace = buildPTSBETrace(traceCtx.kernelTrace, noiseModel);
+  auto recordLayout = buildRecordLayout(ptsbeTrace);
+
+  // Named registers survive as record-site names whenever per-shot records
+  // are produced (sequential data requested, or forced on by mid-circuit
+  // measurement). Warn only when records are unavailable.
+  const bool producesRecords =
+      options.include_sequential_data || hasMidCircuitMeasurement(ptsbeTrace);
+  if (!producesRecords)
+    warnNamedRegisters(kernelName, traceCtx);
 
   std::optional<PTSBEExecutionData> executionData;
   if (options.return_execution_data) {
@@ -242,6 +265,7 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
 
   // Stage 5: Aggregate per-trajectory results
   sample_result result(aggregateResults(perTrajectoryResults));
+  result.set_record_layout(std::move(recordLayout));
 
   // Stage 6: Attach trajectories and set execution data on result if requested
   if (executionData) {
