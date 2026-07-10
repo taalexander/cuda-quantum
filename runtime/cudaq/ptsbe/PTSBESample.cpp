@@ -308,10 +308,10 @@ void populateExecutionDataTrajectories(
   }
 }
 
-/// Read CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT. When set, it takes precedence over
-/// PTSBEOptions::max_shots_per_slot; 0 means unlimited.
-static std::optional<std::size_t> maxShotsPerSlotEnvOverride() {
-  const char *value = std::getenv("CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT");
+/// Read CUDAQ_PTSBE_MAX_SHOTS_PER_PATH. When set, it takes precedence over
+/// PTSBEOptions::max_shots_per_path; 0 means unlimited.
+static std::optional<std::size_t> maxShotsPerPathEnvOverride() {
+  const char *value = std::getenv("CUDAQ_PTSBE_MAX_SHOTS_PER_PATH");
   if (!value || !*value)
     return std::nullopt;
   errno = 0;
@@ -319,7 +319,7 @@ static std::optional<std::size_t> maxShotsPerSlotEnvOverride() {
   auto parsed = std::strtoull(value, &end, 10);
   if (errno != 0 || end == value || *end != '\0')
     throw std::invalid_argument(
-        "Invalid CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT value '" + std::string(value) +
+        "Invalid CUDAQ_PTSBE_MAX_SHOTS_PER_PATH value '" + std::string(value) +
         "': expected a non-negative integer (0 = unlimited).");
   return static_cast<std::size_t>(parsed);
 }
@@ -331,14 +331,14 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
   batch.trace = std::move(trace);
   batch.measureQubits = extractMeasureQubits(batch.trace);
   batch.hasMidCircuitMeasurement = hasMidCircuitMeasurement(batch.trace);
-  auto envMaxShotsPerSlot = maxShotsPerSlotEnvOverride();
-  if (envMaxShotsPerSlot)
+  auto envMaxShotsPerPath = maxShotsPerPathEnvOverride();
+  if (envMaxShotsPerPath)
     cudaq::info("[ptsbe] max shots per slot set to {} via "
-                "CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT",
-                *envMaxShotsPerSlot);
-  batch.maxShotsPerSlot = envMaxShotsPerSlot.has_value()
-                              ? *envMaxShotsPerSlot
-                              : options.max_shots_per_slot.value_or(
+                "CUDAQ_PTSBE_MAX_SHOTS_PER_PATH",
+                *envMaxShotsPerPath);
+  batch.maxShotsPerPath = envMaxShotsPerPath.has_value()
+                              ? *envMaxShotsPerPath
+                              : options.max_shots_per_path.value_or(
                                     batch.hasMidCircuitMeasurement ? 1 : 0);
   // Mid-circuit replay produces per-shot records; sequential data is the
   // channel that carries them, so it is always on for such batches.

@@ -17,7 +17,7 @@ from cudaq.mlir._mlir_libs._quakeDialects.cudaq_runtime.ptsbe import *
 
 
 def _validate_ptsbe_args(kernel, args, shots_count, noise_model,
-                         max_trajectories, max_shots_per_slot):
+                         max_trajectories, max_shots_per_path):
     """Validate arguments common to `sample` and `sample_async`."""
     decorator = kernel
     if not isa_kernel_decorator(decorator):
@@ -43,11 +43,11 @@ def _validate_ptsbe_args(kernel, args, shots_count, noise_model,
             raise RuntimeError(
                 "Invalid `max_trajectories`. Must be a positive integer.")
 
-    if max_shots_per_slot is not None:
-        if (not isinstance(max_shots_per_slot, int)) or (max_shots_per_slot
+    if max_shots_per_path is not None:
+        if (not isinstance(max_shots_per_path, int)) or (max_shots_per_path
                                                          < 0):
             raise RuntimeError(
-                "Invalid `max_shots_per_slot`. Must be a non-negative "
+                "Invalid `max_shots_per_path`. Must be a non-negative "
                 "integer.")
 
     _detail_check_conditionals_on_measure(decorator)
@@ -65,7 +65,7 @@ def sample(kernel,
            shot_allocation=None,
            return_execution_data=False,
            include_sequential_data=False,
-           max_shots_per_slot=None):
+           max_shots_per_path=None):
     """
     Sample using Pre-Trajectory Sampling with Batch Execution (`PTSBE`).
 
@@ -97,11 +97,11 @@ def sample(kernel,
           returned result. Defaults to ``False``.
       include_sequential_data (bool): Populate per-shot sequential bitstring
           data on the result. Defaults to ``False``.
-      max_shots_per_slot (int or ``None``): Maximum shots executed per batch
+      max_shots_per_path (int or ``None``): Maximum shots executed per batch
           slot. ``None`` (default) selects automatically: 1 when the kernel
           contains mid-circuit measurement or reset, unlimited otherwise.
           0 forces unlimited. The environment variable
-          ``CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT`` takes precedence.
+          ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.
 
     Returns:
       ``SampleResult``: Measurement results. Returns a list of results
@@ -111,7 +111,7 @@ def sample(kernel,
       RuntimeError: If the kernel is invalid or arguments are invalid.
     """
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
-                                     max_trajectories, max_shots_per_slot)
+                                     max_trajectories, max_shots_per_path)
 
     if noise_model is None:
         noise_model = cudaq_runtime.NoiseModel()
@@ -126,7 +126,7 @@ def sample(kernel,
                 decorator.uniqName, module, compiled, shots_count, noise_model,
                 max_trajectories, sampling_strategy, shot_allocation,
                 return_execution_data, include_sequential_data,
-                max_shots_per_slot, *processedArgs)
+                max_shots_per_path, *processedArgs)
             results.append(result)
         return results
 
@@ -135,7 +135,7 @@ def sample(kernel,
     return cudaq_runtime.ptsbe.sample_impl(
         decorator.uniqName, module, compiled, shots_count, noise_model,
         max_trajectories, sampling_strategy, shot_allocation,
-        return_execution_data, include_sequential_data, max_shots_per_slot,
+        return_execution_data, include_sequential_data, max_shots_per_path,
         *processedArgs)
 
 
@@ -149,7 +149,7 @@ def sample_async(kernel,
                  shot_allocation=None,
                  return_execution_data=False,
                  include_sequential_data=False,
-                 max_shots_per_slot=None):
+                 max_shots_per_path=None):
     """
     Asynchronously sample using PTSBE. Returns a future whose result
     can be retrieved via ``.get()``.
@@ -166,9 +166,9 @@ def sample_async(kernel,
           allocating shots across trajectories.
       return_execution_data (bool): Include execution data in the result.
       include_sequential_data (bool): Populate per-shot sequential data.
-      max_shots_per_slot (int or ``None``): Maximum shots per batch slot.
+      max_shots_per_path (int or ``None``): Maximum shots per batch slot.
           ``None`` selects automatically; 0 forces unlimited. The environment
-          variable ``CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT`` takes precedence.
+          variable ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.
 
     Returns:
       ``AsyncPTSBESampleResult``: A future whose ``.get()`` returns the
@@ -178,7 +178,7 @@ def sample_async(kernel,
       RuntimeError: If the kernel is invalid or arguments are invalid.
     """
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
-                                     max_trajectories, max_shots_per_slot)
+                                     max_trajectories, max_shots_per_path)
 
     if noise_model is None:
         noise_model = cudaq_runtime.NoiseModel()
@@ -188,6 +188,6 @@ def sample_async(kernel,
     impl = cudaq_runtime.ptsbe.sample_async_impl(
         decorator.uniqName, module, shots_count, noise_model, max_trajectories,
         sampling_strategy, shot_allocation, return_execution_data,
-        include_sequential_data, max_shots_per_slot, *processedArgs)
+        include_sequential_data, max_shots_per_path, *processedArgs)
 
     return AsyncSampleResult(impl, module)

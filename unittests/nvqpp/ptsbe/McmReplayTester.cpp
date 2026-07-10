@@ -93,7 +93,7 @@ CUDAQ_TEST(McmReplayTest, BellCollapseRecordsAlwaysCorrelated) {
   batch.measureQubits = {0, 1};
   batch.includeSequentialData = true;
   batch.hasMidCircuitMeasurement = true;
-  batch.maxShotsPerSlot = 1;
+  batch.maxShotsPerPath = 1;
 
   const std::size_t shots = 100;
   batch.trajectories.push_back(cudaq::KrausTrajectory(0, {}, 1.0, shots));
@@ -249,7 +249,7 @@ CUDAQ_TEST(McmReplayTest, InterleavedBitFlipRecordsFollowSelectedTrajectory) {
 // ============================================================================
 
 // One noise-free trajectory, 100 shots, an MCM site with a 50/50 outcome:
-// each shot must replay its measurement independently (maxShotsPerSlot = 1),
+// each shot must replay its measurement independently (maxShotsPerPath = 1),
 // so both record values appear. If all shots shared one drawn outcome, every
 // record would be identical. The trailing x pins collapse per shot: the
 // second bit is always the negation of the first.
@@ -266,7 +266,7 @@ CUDAQ_TEST(McmReplayTest, RecordsDecorrelatedAcrossShotsOfOneTrajectory) {
   batch.measureQubits = {0};
   batch.includeSequentialData = true;
   batch.hasMidCircuitMeasurement = true;
-  batch.maxShotsPerSlot = 1;
+  batch.maxShotsPerPath = 1;
 
   const std::size_t shots = 100;
   batch.trajectories.push_back(cudaq::KrausTrajectory(0, {}, 1.0, shots));
@@ -470,34 +470,34 @@ struct ScopedEnvVar {
 
 } // namespace
 
-// CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT overrides both the automatic selection and
-// an explicitly set PTSBEOptions::max_shots_per_slot.
-CUDAQ_TEST(McmReplayTest, EnvVarOverridesMaxShotsPerSlot) {
+// CUDAQ_PTSBE_MAX_SHOTS_PER_PATH overrides both the automatic selection and
+// an explicitly set PTSBEOptions::max_shots_per_path.
+CUDAQ_TEST(McmReplayTest, EnvVarOverridesMaxShotsPerPath) {
   PTSBEOptions options;
-  options.max_shots_per_slot = 7;
+  options.max_shots_per_path = 7;
 
-  ScopedEnvVar env("CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT", "4");
+  ScopedEnvVar env("CUDAQ_PTSBE_MAX_SHOTS_PER_PATH", "4");
   auto batch = detail::buildPTSBatchFromTrace(makeMcmTrace(), options, 16);
 
   EXPECT_TRUE(batch.hasMidCircuitMeasurement);
-  EXPECT_EQ(batch.maxShotsPerSlot, 4u);
+  EXPECT_EQ(batch.maxShotsPerPath, 4u);
 }
 
-CUDAQ_TEST(McmReplayTest, MaxShotsPerSlotDefaultsWithoutEnvOverride) {
+CUDAQ_TEST(McmReplayTest, MaxShotsPerPathDefaultsWithoutEnvOverride) {
   PTSBEOptions options;
 
   auto autoBatch = detail::buildPTSBatchFromTrace(makeMcmTrace(), options, 16);
-  EXPECT_EQ(autoBatch.maxShotsPerSlot, 1u);
+  EXPECT_EQ(autoBatch.maxShotsPerPath, 1u);
 
-  options.max_shots_per_slot = 7;
+  options.max_shots_per_path = 7;
   auto explicitBatch =
       detail::buildPTSBatchFromTrace(makeMcmTrace(), options, 16);
-  EXPECT_EQ(explicitBatch.maxShotsPerSlot, 7u);
+  EXPECT_EQ(explicitBatch.maxShotsPerPath, 7u);
 }
 
-CUDAQ_TEST(McmReplayTest, EnvVarMaxShotsPerSlotRejectsNonNumeric) {
+CUDAQ_TEST(McmReplayTest, EnvVarMaxShotsPerPathRejectsNonNumeric) {
   PTSBEOptions options;
 
-  ScopedEnvVar env("CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT", "many");
+  ScopedEnvVar env("CUDAQ_PTSBE_MAX_SHOTS_PER_PATH", "many");
   EXPECT_ANY_THROW(detail::buildPTSBatchFromTrace(makeMcmTrace(), options, 16));
 }

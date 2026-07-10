@@ -46,8 +46,8 @@ struct PTSBatch {
   /// covering more shots than this cap are split so per-shot measurement
   /// records within one trajectory stay decorrelated. Defaults to 1 when
   /// hasMidCircuitMeasurement is set, unlimited otherwise (see
-  /// PTSBEOptions::max_shots_per_slot).
-  std::size_t maxShotsPerSlot = 0;
+  /// PTSBEOptions::max_shots_per_path).
+  std::size_t maxShotsPerPath = 0;
 
   /// @brief Calculate total shots across all trajectories
   std::size_t totalShots() const;
