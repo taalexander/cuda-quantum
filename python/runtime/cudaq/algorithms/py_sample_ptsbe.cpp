@@ -47,7 +47,7 @@ static ptsbe::sample_result pySamplePTSBE(
         sampling_strategy,
     std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
     bool return_execution_data, bool include_sequential_data,
-    std::optional<std::size_t> max_shots_per_slot, nanobind::args runtimeArgs) {
+    std::optional<std::size_t> max_shots_per_path, nanobind::args runtimeArgs) {
   if (shots_count == 0)
     return ptsbe::sample_result();
 
@@ -55,7 +55,7 @@ static ptsbe::sample_result pySamplePTSBE(
   ptsbe_options.return_execution_data = return_execution_data;
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
-  ptsbe_options.max_shots_per_slot = max_shots_per_slot;
+  ptsbe_options.max_shots_per_path = max_shots_per_path;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -118,13 +118,13 @@ static AsyncPTSBESampleResultImpl pySampleAsyncPTSBE(
         sampling_strategy,
     std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
     bool return_execution_data, bool include_sequential_data,
-    std::optional<std::size_t> max_shots_per_slot, nanobind::args runtimeArgs) {
+    std::optional<std::size_t> max_shots_per_path, nanobind::args runtimeArgs) {
 
   ptsbe::PTSBEOptions ptsbe_options;
   ptsbe_options.return_execution_data = return_execution_data;
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
-  ptsbe_options.max_shots_per_slot = max_shots_per_slot;
+  ptsbe_options.max_shots_per_path = max_shots_per_path;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -424,7 +424,7 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
             nanobind::arg("shot_allocation").none(),
             nanobind::arg("return_execution_data"),
             nanobind::arg("include_sequential_data"),
-            nanobind::arg("max_shots_per_slot").none(),
+            nanobind::arg("max_shots_per_path").none(),
             nanobind::arg("arguments"),
             R"pbdoc(
 Run PTSBE sampling on the provided kernel.
@@ -439,10 +439,10 @@ Args:
   shot_allocation: Shot allocation strategy or None for default (proportional).
   return_execution_data: Whether to include execution data in the result.
   include_sequential_data: Whether to populate per-shot sequential data.
-  max_shots_per_slot: Maximum shots per batch slot. None selects
+  max_shots_per_path: Maximum shots per batch slot. None selects
     automatically (1 with mid-circuit measurement or reset, unlimited
     otherwise); 0 forces unlimited. The environment variable
-    CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT takes precedence.
+    CUDAQ_PTSBE_MAX_SHOTS_PER_PATH takes precedence.
   *arguments: The kernel arguments.
 
 Returns:
@@ -458,7 +458,7 @@ Returns:
       nanobind::arg("shot_allocation").none(),
       nanobind::arg("return_execution_data"),
       nanobind::arg("include_sequential_data"),
-      nanobind::arg("max_shots_per_slot").none(), nanobind::arg("arguments"),
+      nanobind::arg("max_shots_per_path").none(), nanobind::arg("arguments"),
       "Run PTSBE sampling asynchronously. Returns an "
       "AsyncSampleResultImpl.");
 }

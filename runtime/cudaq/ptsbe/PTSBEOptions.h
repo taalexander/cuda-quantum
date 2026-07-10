@@ -46,8 +46,8 @@ struct PTSBEOptions {
   /// decorrelated. When `nullopt` (default), selected automatically: 1 when
   /// the trace contains mid-circuit measurement or reset, unlimited
   /// otherwise. An explicit 0 forces unlimited. The environment variable
-  /// `CUDAQ_PTSBE_MAX_SHOTS_PER_SLOT` takes precedence over this option.
-  std::optional<std::size_t> max_shots_per_slot = std::nullopt;
+  /// `CUDAQ_PTSBE_MAX_SHOTS_PER_PATH` takes precedence over this option.
+  std::optional<std::size_t> max_shots_per_path = std::nullopt;
 
   /// Custom sampling strategy. If `nullptr`, uses default strategy.
   std::shared_ptr<PTSSamplingStrategy> strategy = nullptr;
