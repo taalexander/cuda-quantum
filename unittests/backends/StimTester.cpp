@@ -222,10 +222,15 @@ CUDAQ_TEST(StimQECTester, AdapterRejectsNegativeObservableIndex) {
 }
 
 // End-to-end coverage of the NVQIR adapter
-CUDAQ_TEST(StimQECTester, AdapterAcceptsRawChronologicalIndices) {
-  // Clear stale handle-to-index maps left by earlier tests in this process
-  // so the raw chronological indices below are not remapped.
+CUDAQ_TEST(StimQECTester, AdapterDispatchesToActiveSimulator) {
+  // The adapter resolves small non-negative Result* values through NVQIR's
+  // thread-local measure-handle map. Kernel-builder suites running earlier in
+  // this binary populate that map via handle-form measurements, which would
+  // remap the hand-encoded chronological indices below. Clear it once so the
+  // encoded indices pass through unchanged. (CI runs each gtest case as its
+  // own process via ctest, so this only matters for whole-binary runs.)
   __quantum__rt__clear_result_maps();
+
   StimCircuitSimulatorTester sim;
   sim.setRandomSeed(42);
   nvqir::AnalysisScope scope{"stim_qec_adapter_test", sim, {}};

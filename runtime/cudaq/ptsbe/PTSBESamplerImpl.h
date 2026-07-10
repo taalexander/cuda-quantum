@@ -24,7 +24,9 @@
 #include "nvqir/CircuitSimulator.h"
 #include "nvqir/Gates.h"
 #include <cstddef>
+#include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace cudaq::ptsbe {
@@ -43,11 +45,51 @@ template <typename ScalarType>
 using GateTask =
     typename nvqir::CircuitSimulatorBase<ScalarType>::GateApplicationTask;
 
-/// @brief Walk the PTSBE trace and build the merged task list for one
-/// trajectory. Gate entries become gate tasks, Noise entries are resolved
-/// via the trajectory selections (channel looked up from the trace), and
-/// Measurement entries are skipped (terminal measurements are handled
-/// separately by the simulator).
+/// @brief Kind of operation replayed at one site of a merged trajectory.
+enum class ReplayOpKind { Gate, Measure, Reset, MeasureReset };
+
+/// @brief One site-ordered operation in a merged trajectory replay list.
+///
+/// Gate ops carry a simulator gate task. Measure, Reset, and MeasureReset
+/// ops carry the site's target qubits; measuring ops additionally carry the
+/// position of their bit in the per-shot measurement record.
+template <typename ScalarType>
+struct ReplayOp {
+  ReplayOpKind kind;
+  GateTask<ScalarType> task;
+  std::vector<std::size_t> qubits;
+  std::optional<std::size_t> recordOffset;
+
+  explicit ReplayOp(GateTask<ScalarType> gateTask)
+      : kind(ReplayOpKind::Gate), task(std::move(gateTask)) {}
+
+  ReplayOp(ReplayOpKind kind, std::vector<std::size_t> qubits,
+           std::optional<std::size_t> recordOffset)
+      : kind(kind), task({}, {}, {}, {}, {}), qubits(std::move(qubits)),
+        recordOffset(recordOffset) {}
+};
+
+/// @brief Walk the PTSBE trace and build the site-ordered replay-op list for
+/// one trajectory. Gate entries become Gate ops, Noise entries are resolved
+/// to Gate ops via the trajectory selections (channel looked up from the
+/// trace), and Measurement, Reset, and MeasureReset entries become their op
+/// kinds carrying the site's qubits and record offset.
+///
+/// @param includeIdentity When true, identity Kraus operators are
+///   included as Gate ops. Useful if you require all trajectories to have
+///   identical op structure.
+template <typename ScalarType>
+std::vector<ReplayOp<ScalarType>>
+mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
+                         const cudaq::KrausTrajectory &trajectory,
+                         bool includeIdentity = false);
+
+/// @brief Legacy gate-only view of mergeSitesWithTrajectory: Gate entries
+/// become gate tasks and Noise entries are resolved via the trajectory
+/// selections, while Measurement, Reset, and MeasureReset entries are
+/// dropped. Only valid for terminal-measurement replay, where the simulator
+/// samples measurement qubits after applying all gates; traces with
+/// mid-circuit measurement or reset need mergeSitesWithTrajectory.
 ///
 /// @param includeIdentity When true, identity Kraus operators are
 ///   included as gate tasks. Useful if you require all trajectories to have
@@ -81,11 +123,19 @@ GateTask<ScalarType> krausSelectionToTask(const cudaq::KrausSelection &sel,
 
 /// @brief Generic PTSBE execution implementation
 ///
-/// For each trajectory:
+/// For each trajectory of a terminal-measurement-only batch:
 /// - Resets simulator to computational zero state
 /// - Merges PTSBE trace with trajectory noise selections
 /// - Applies merged gate tasks
 /// - Samples measurement qubits
+///
+/// When the batch has mid-circuit measurement or reset
+/// (PTSBatch::hasMidCircuitMeasurement), each shot instead replays the
+/// site-ordered op list from mergeSitesWithTrajectory: measurement sites
+/// collapse the state and write their bit into a fixed-width record string
+/// at the site's record offset, and reset sites return their qubits to |0>.
+/// Each shot's record becomes one count entry (and one sequential-data entry
+/// when requested).
 ///
 /// Returns per-trajectory results for flexibility. Use aggregateResults()
 /// to combine into a single sample_result if needed.

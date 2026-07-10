@@ -37,6 +37,28 @@ std::size_t countInstructions(std::span<const TraceInstruction> trace,
   return count;
 }
 
+bool hasMidCircuitMeasurement(std::span<const TraceInstruction> trace) {
+  std::vector<std::size_t> lastTouch(numQubits(trace), 0);
+  for (std::size_t i = 0; i < trace.size(); ++i) {
+    for (auto id : trace[i].targets)
+      lastTouch[id] = i;
+    for (auto id : trace[i].controls)
+      lastTouch[id] = i;
+  }
+
+  for (std::size_t i = 0; i < trace.size(); ++i) {
+    const auto &inst = trace[i];
+    if (inst.type != TraceInstructionType::Measurement &&
+        inst.type != TraceInstructionType::MeasureReset &&
+        inst.type != TraceInstructionType::Reset)
+      continue;
+    for (auto id : inst.targets)
+      if (lastTouch[id] > i)
+        return true;
+  }
+  return false;
+}
+
 std::size_t
 PTSBEExecutionData::count_instructions(TraceInstructionType type,
                                        std::optional<std::string> name) const {

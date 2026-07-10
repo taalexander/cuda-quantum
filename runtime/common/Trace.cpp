@@ -66,3 +66,16 @@ void cudaq::Trace::appendMeasurement(std::string_view name,
                             std::nullopt, TraceInstructionType::Measurement,
                             std::move(register_name));
 }
+
+void cudaq::Trace::appendReset(std::vector<QuditInfo> targets) {
+  assert(!targets.empty() && "A reset must have at least one target");
+  auto findMaxID = [](const std::vector<QuditInfo> &qudits) -> std::size_t {
+    return std::max_element(qudits.cbegin(), qudits.cend(),
+                            [](auto &a, auto &b) { return a.id < b.id; })
+        ->id;
+  };
+  numQudits = std::max(numQudits, findMaxID(targets) + 1);
+  instructions.emplace_back("reset", std::vector<double>{},
+                            std::vector<QuditInfo>{}, std::move(targets),
+                            std::nullopt, TraceInstructionType::Reset);
+}

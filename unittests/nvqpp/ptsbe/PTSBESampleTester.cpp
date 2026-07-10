@@ -127,14 +127,12 @@ CUDAQ_TEST(PTSBESampleTest, DetectsConditionalFeedbackWithRegisterNames) {
   EXPECT_TRUE(cudaq::detail::hasConditionalFeedback("", &ctx));
 }
 
-CUDAQ_TEST(PTSBESampleTest, ValidateKernelThrowsForMCMContext) {
+// Named measurement registers alone are not conditional feedback: validation
+// only rejects kernels whose MLIR metadata flags feedback.
+CUDAQ_TEST(PTSBESampleTest, ValidateKernelAcceptsRegisterNamesOnlyContext) {
   cudaq::ExecutionContext ctx("tracer");
   ctx.registerNames.push_back("mcm_result");
-  try {
-    detail::validatePTSBEKernel("testKernel", ctx);
-    FAIL() << "Expected an exception for MCM context";
-  } catch (...) {
-  }
+  EXPECT_NO_THROW(detail::validatePTSBEKernel("testKernel", ctx));
 }
 
 CUDAQ_TEST(PTSBESampleTest, ValidateKernelNoThrowForValidContext) {

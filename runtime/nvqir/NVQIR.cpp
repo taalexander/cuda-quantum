@@ -687,6 +687,15 @@ void __quantum__qis__cz__body(Qubit *q, Qubit *r) {
 void __quantum__qis__reset(Qubit *q) {
   auto qI = qubitToSizeT(q);
   ScopedTraceWithContext("NVQIR::reset", qI);
+  // In tracer mode there is no simulator state to reset. Record the reset in
+  // the kernel trace and return. Backends implement resetQubit directly, so
+  // the guard lives here rather than in a CircuitSimulatorBase override.
+  if (cudaq::isInTracerMode()) {
+    nvqir::getCircuitSimulatorInternal()->flushGateQueue();
+    cudaq::getExecutionContext()->kernelTrace.appendReset(
+        {cudaq::QuditInfo(2, qI)});
+    return;
+  }
   nvqir::getCircuitSimulatorInternal()->resetQubit(qI);
 }
 

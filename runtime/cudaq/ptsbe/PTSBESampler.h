@@ -30,14 +30,28 @@ struct PTSBatch {
   /// @brief Sampled noise trajectories
   std::vector<cudaq::KrausTrajectory> trajectories;
 
-  /// @brief Qubits to measure (terminal measurements)
-  /// NOTE: This currently only applies to kernels that are terminal measurement
-  /// only which is a limitation of the current PTSBE implementation.
+  /// @brief Qubits to measure (terminal measurements). Used only when
+  /// hasMidCircuitMeasurement is false; mid-circuit replay reads every
+  /// measurement site from the trace instead.
   std::vector<std::size_t> measureQubits;
 
   /// @brief Populate per-shot sequential bitstring data on the result. When
   /// false (default), only aggregated counts are produced.
   bool includeSequentialData = false;
+
+  /// @brief True when the trace contains mid-circuit measurement or reset:
+  /// some Measurement, MeasureReset, or Reset instruction has a later
+  /// instruction touching one of its target qubits. Executors must replay
+  /// measure/reset sites in program order instead of sampling terminal
+  /// measurements only.
+  bool hasMidCircuitMeasurement = false;
+
+  /// @brief Maximum shots executed per batch slot (0 = unlimited). Slots
+  /// covering more shots than this cap are split so per-shot measurement
+  /// records within one trajectory stay decorrelated. Defaults to 1 when
+  /// hasMidCircuitMeasurement is set, unlimited otherwise (see
+  /// PTSBEOptions::max_shots_per_slot).
+  std::size_t maxShotsPerSlot = 0;
 
   /// @brief Calculate total shots across all trajectories
   std::size_t totalShots() const;

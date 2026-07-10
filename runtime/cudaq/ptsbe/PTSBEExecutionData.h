@@ -21,20 +21,19 @@ namespace cudaq::ptsbe {
 
 /// @brief Discriminator for instruction types within the PTSBE execution data.
 ///
-/// Currently supports Gate, Noise, and Measurement for static circuits.
-///
-// NOTE: For mid-circuit measurement (MCM) and dynamic circuit support,
-// execution internally branches at each MCM point. The user-facing
-// output here should flatten all branches: each trajectory represents a
-// complete path through every MCM outcome, so this container always
-// holds a flat instruction list and flat trajectory list. For
-// ptsbe::observe, KrausTrajectory will also need an expectation_value
-// field since exact observe computes <psi|H|psi> from the state vector
-// without producing measurement counts.
+/// Supports mid-circuit measurement and reset: Measurement covers both
+/// mid-circuit and terminal sites, and buildPTSBETrace fuses a Measurement
+/// immediately followed by a Reset on the same qubit(s) (with no intervening
+/// instruction touching them) into a single MeasureReset site. Execution does
+/// not branch at measurement sites; outcomes are drawn at their true
+/// probabilities during replay, so this container always holds a flat
+/// instruction list and flat trajectory list.
 enum class TraceInstructionType {
-  Gate,       /// Quantum gate operation (H, X, CNOT, RX, etc.)
-  Noise,      /// Noise channel location (depolarizing, amplitude_damping, etc.)
-  Measurement /// Terminal measurement operation
+  Gate,        /// Quantum gate operation (H, X, CNOT, RX, etc.)
+  Noise,       /// Noise channel location (depolarizing, amplitude_damping, ...)
+  Measurement, /// Measurement operation (mid-circuit or terminal)
+  Reset,       /// Qubit reset to |0>
+  MeasureReset /// Fused measurement immediately followed by reset
 };
 
 /// @brief Single operation in the PTSBE execution trace.
@@ -61,6 +60,16 @@ struct TraceInstruction {
   /// @brief Noise channel (populated only for Noise instructions)
   std::optional<cudaq::kraus_channel> channel;
 
+  /// @brief Position of this instruction's bit in the per-shot measurement
+  /// record. Assigned densely in trace order by buildPTSBETrace for every
+  /// Measurement and MeasureReset instruction; nullopt for all other types.
+  std::optional<std::size_t> record_index;
+
+  /// @brief Measurement register name from the kernel (populated for
+  /// Measurement and MeasureReset instructions when the kernel names the
+  /// result; nullopt for unnamed measurements and all other types)
+  std::optional<std::string> register_name;
+
   /// @brief Default constructor
   TraceInstruction() = default;
 
@@ -69,10 +78,13 @@ struct TraceInstruction {
                    std::vector<std::size_t> targets,
                    std::vector<std::size_t> controls,
                    std::vector<double> params,
-                   std::optional<cudaq::kraus_channel> channel = std::nullopt)
+                   std::optional<cudaq::kraus_channel> channel = std::nullopt,
+                   std::optional<std::size_t> record_index = std::nullopt,
+                   std::optional<std::string> register_name = std::nullopt)
       : type(type), name(std::move(name)), targets(std::move(targets)),
         controls(std::move(controls)), params(std::move(params)),
-        channel(std::move(channel)) {}
+        channel(std::move(channel)), record_index(record_index),
+        register_name(std::move(register_name)) {}
 };
 
 /// @brief Alias for the PTSBE instruction sequence.
@@ -86,6 +98,18 @@ std::size_t numQubits(std::span<const TraceInstruction> trace);
 std::size_t countInstructions(std::span<const TraceInstruction> trace,
                               TraceInstructionType type,
                               std::optional<std::string> name = std::nullopt);
+
+/// @brief True when the trace requires mid-circuit measurement handling.
+///
+/// Holds iff some Measurement or MeasureReset instruction is followed by a
+/// later instruction (Gate, Noise, Reset, Measurement, or MeasureReset)
+/// touching one of its target qubits, or some Reset sits mid-circuit (a later
+/// instruction touches one of its targets). Terminal-only traces return
+/// false, including traces whose last operation on a qubit is a Reset or
+/// MeasureReset: a trailing reset cannot influence any recorded bit, so such
+/// traces execute on the terminal-sampling path (which samples MeasureReset
+/// qubits alongside plain Measurement qubits).
+bool hasMidCircuitMeasurement(std::span<const TraceInstruction> trace);
 
 /// @brief Container for PTSBE execution data including circuit structure,
 /// trajectory specifications, and per-trajectory measurement outcomes.

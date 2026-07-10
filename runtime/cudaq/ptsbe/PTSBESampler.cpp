@@ -19,26 +19,42 @@
 namespace cudaq::ptsbe {
 
 template <typename ScalarType>
-std::vector<GateTask<ScalarType>>
-mergeTasksWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
+std::vector<ReplayOp<ScalarType>>
+mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
                          const cudaq::KrausTrajectory &trajectory,
                          bool includeIdentity) {
   const auto &selections = trajectory.kraus_selections;
 
-  std::vector<GateTask<ScalarType>> merged;
+  std::vector<ReplayOp<ScalarType>> merged;
   merged.reserve(ptsbeTrace.size());
 
   std::size_t noiseIdx = 0;
   for (std::size_t i = 0; i < ptsbeTrace.size(); ++i) {
     const auto &inst = ptsbeTrace[i];
 
-    if (inst.type == TraceInstructionType::Gate)
-      merged.push_back(detail::convertToSimulatorTask<ScalarType>(inst));
+    switch (inst.type) {
+    case TraceInstructionType::Gate:
+      merged.emplace_back(detail::convertToSimulatorTask<ScalarType>(inst));
+      break;
+    case TraceInstructionType::Noise:
+      break;
+    case TraceInstructionType::Measurement:
+      merged.emplace_back(ReplayOpKind::Measure, inst.targets,
+                          inst.record_index);
+      break;
+    case TraceInstructionType::Reset:
+      merged.emplace_back(ReplayOpKind::Reset, inst.targets, std::nullopt);
+      break;
+    case TraceInstructionType::MeasureReset:
+      merged.emplace_back(ReplayOpKind::MeasureReset, inst.targets,
+                          inst.record_index);
+      break;
+    }
 
     while (noiseIdx < selections.size() &&
            selections[noiseIdx].circuit_location == i) {
       if (includeIdentity || selections[noiseIdx].is_error) {
-        merged.push_back(detail::krausSelectionToTask<ScalarType>(
+        merged.emplace_back(detail::krausSelectionToTask<ScalarType>(
             selections[noiseIdx], inst));
       }
       ++noiseIdx;
@@ -52,6 +68,28 @@ mergeTasksWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
         " >= " + std::to_string(ptsbeTrace.size()));
   }
 
+  return merged;
+}
+
+template std::vector<ReplayOp<float>>
+mergeSitesWithTrajectory<float>(std::span<const TraceInstruction>,
+                                const cudaq::KrausTrajectory &, bool);
+template std::vector<ReplayOp<double>>
+mergeSitesWithTrajectory<double>(std::span<const TraceInstruction>,
+                                 const cudaq::KrausTrajectory &, bool);
+
+template <typename ScalarType>
+std::vector<GateTask<ScalarType>>
+mergeTasksWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
+                         const cudaq::KrausTrajectory &trajectory,
+                         bool includeIdentity) {
+  auto ops = mergeSitesWithTrajectory<ScalarType>(ptsbeTrace, trajectory,
+                                                  includeIdentity);
+  std::vector<GateTask<ScalarType>> merged;
+  merged.reserve(ops.size());
+  for (auto &op : ops)
+    if (op.kind == ReplayOpKind::Gate)
+      merged.push_back(std::move(op.task));
   return merged;
 }
 
@@ -186,8 +224,17 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
   if (totalShots == 0)
     return {};
 
-  if (batch.measureQubits.empty())
+  if (!batch.hasMidCircuitMeasurement && batch.measureQubits.empty())
     return {};
+
+  // Width of the per-shot record in mid-circuit replay mode: one bit per
+  // target qubit of every measuring site, at the site's record index.
+  std::size_t numRecordBits = 0;
+  if (batch.hasMidCircuitMeasurement)
+    for (const auto &inst : batch.trace)
+      if (inst.record_index)
+        numRecordBits =
+            std::max(numRecordBits, *inst.record_index + inst.targets.size());
 
   std::vector<cudaq::sample_result> results;
   results.reserve(batch.trajectories.size());
@@ -205,23 +252,76 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
       continue;
     }
 
-    simulator.setToZeroState();
+    if (!batch.hasMidCircuitMeasurement) {
+      simulator.setToZeroState();
 
-    auto mergedTasks =
-        cudaq::ptsbe::mergeTasksWithTrajectory<ScalarType>(batch.trace, traj);
+      auto mergedTasks =
+          cudaq::ptsbe::mergeTasksWithTrajectory<ScalarType>(batch.trace, traj);
 
-    for (const auto &task : mergedTasks)
-      simulator.applyGate(task);
-    simulator.flushGateQueue();
+      for (const auto &task : mergedTasks)
+        simulator.applyGate(task);
+      simulator.flushGateQueue();
 
-    auto execResult =
-        simulator.sample(batch.measureQubits, static_cast<int>(traj.num_shots),
-                         batch.includeSequentialData);
+      auto execResult = simulator.sample(batch.measureQubits,
+                                         static_cast<int>(traj.num_shots),
+                                         batch.includeSequentialData);
 
-    cudaq::ExecutionResult er{execResult.counts};
-    if (batch.includeSequentialData)
-      er.sequentialData = std::move(execResult.sequentialData);
-    results.push_back(cudaq::sample_result{std::move(er)});
+      cudaq::ExecutionResult er{execResult.counts};
+      if (batch.includeSequentialData)
+        er.sequentialData = std::move(execResult.sequentialData);
+      results.push_back(cudaq::sample_result{std::move(er)});
+    } else {
+      // Site-ordered per-shot replay: every measuring site (mid-circuit and
+      // terminal) collapses via mz and writes its bit into the record, so no
+      // separate terminal sampling pass runs. Each shot replays
+      // independently to keep records within one trajectory decorrelated.
+      auto ops =
+          cudaq::ptsbe::mergeSitesWithTrajectory<ScalarType>(batch.trace, traj);
+
+      cudaq::CountsDictionary counts;
+      std::vector<std::string> sequentialData;
+      if (batch.includeSequentialData)
+        sequentialData.reserve(traj.num_shots);
+
+      for (std::size_t shot = 0; shot < traj.num_shots; ++shot) {
+        simulator.setToZeroState();
+        std::string record(numRecordBits, '0');
+
+        for (const auto &op : ops) {
+          switch (op.kind) {
+          case ReplayOpKind::Gate:
+            simulator.applyGate(op.task);
+            break;
+          case ReplayOpKind::Measure:
+          case ReplayOpKind::MeasureReset:
+            simulator.flushGateQueue();
+            for (std::size_t k = 0; k < op.qubits.size(); ++k) {
+              const bool bit = simulator.mz(op.qubits[k]);
+              if (op.recordOffset)
+                record[*op.recordOffset + k] = bit ? '1' : '0';
+              if (op.kind == ReplayOpKind::MeasureReset)
+                simulator.resetQubit(op.qubits[k]);
+            }
+            break;
+          case ReplayOpKind::Reset:
+            simulator.flushGateQueue();
+            for (auto qubit : op.qubits)
+              simulator.resetQubit(qubit);
+            break;
+          }
+        }
+        simulator.flushGateQueue();
+
+        ++counts[record];
+        if (batch.includeSequentialData)
+          sequentialData.push_back(std::move(record));
+      }
+
+      cudaq::ExecutionResult er{std::move(counts)};
+      if (batch.includeSequentialData)
+        er.sequentialData = std::move(sequentialData);
+      results.push_back(cudaq::sample_result{std::move(er)});
+    }
 
     if ((ti + 1) % progressInterval == 0)
       cudaq::info("[ptsbe] Trajectory progress: {}/{} ({} shots)", ti + 1,
@@ -248,6 +348,16 @@ std::vector<cudaq::sample_result> dispatchPTSBE(SimulatorType &sim,
   // bypassing the batched batchMeasure path which has a per-shot GPU loop.
   const bool forceGeneric =
       cudaq::getEnvBool("CUDAQ_PTSBE_FORCE_GENERIC", false);
+
+  // Batched executors replay gate tasks only and sample terminal
+  // measurements; dispatching a mid-circuit-measurement batch to them would
+  // silently skip collapse and reset. Route such batches to the generic
+  // site-ordered per-shot replay.
+  if (batch.hasMidCircuitMeasurement) {
+    cudaq::info("[ptsbe] Mid-circuit measurement or reset present: "
+                "dispatching to generic per-shot replay sampler");
+    return samplePTSBEGeneric(sim, batch);
+  }
 
   if (!forceGeneric) {
     auto *batchSim = dynamic_cast<BatchSimulator *>(&sim);
