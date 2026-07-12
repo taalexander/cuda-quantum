@@ -50,37 +50,61 @@ enum class ReplayOpKind { Gate, Measure, Reset, MeasureReset };
 
 /// @brief One site-ordered operation in a merged trajectory replay list.
 ///
-/// Gate ops carry a simulator gate task. Measure, Reset, and MeasureReset
-/// ops carry the site's target qubits; measuring ops additionally carry the
-/// position of their bit in the per-shot measurement record.
+/// Gate ops reference a simulator gate task they do not own: trace gates
+/// live in the caller's per-batch gate cache (see convertTraceGates) and
+/// resolved Kraus selections live in the enclosing TrajectoryReplay. Measure,
+/// Reset, and MeasureReset ops carry the site's target qubits; measuring ops
+/// additionally carry the position of their bit in the per-shot measurement
+/// record.
 template <typename ScalarType>
 struct ReplayOp {
   ReplayOpKind kind;
-  GateTask<ScalarType> task;
+  const GateTask<ScalarType> *task = nullptr;
   std::vector<std::size_t> qubits;
   std::optional<std::size_t> recordOffset;
 
-  explicit ReplayOp(GateTask<ScalarType> gateTask)
-      : kind(ReplayOpKind::Gate), task(std::move(gateTask)) {}
+  explicit ReplayOp(const GateTask<ScalarType> *gateTask)
+      : kind(ReplayOpKind::Gate), task(gateTask) {}
 
   ReplayOp(ReplayOpKind kind, std::vector<std::size_t> qubits,
            std::optional<std::size_t> recordOffset)
-      : kind(kind), task({}, {}, {}, {}, {}), qubits(std::move(qubits)),
-        recordOffset(recordOffset) {}
+      : kind(kind), qubits(std::move(qubits)), recordOffset(recordOffset) {}
 };
 
-/// @brief Walk the PTSBE trace and build the site-ordered replay-op list for
-/// one trajectory. Gate entries become Gate ops, Noise entries are resolved
-/// to Gate ops via the trajectory selections (channel looked up from the
-/// trace), and Measurement, Reset, and MeasureReset entries become their op
-/// kinds carrying the site's qubits and record offset.
+/// @brief Site-ordered replay list for one trajectory.
+///
+/// Gate ops in `ops` point either into the per-batch gate cache passed to
+/// mergeSitesWithTrajectory (which the caller must keep alive for as long as
+/// any replay built from it is used) or into `krausTasks`, which owns the
+/// tasks converted from this trajectory's Kraus selections. Move-only:
+/// copying would leave `ops` pointing into the source's `krausTasks`.
+template <typename ScalarType>
+struct TrajectoryReplay {
+  std::vector<GateTask<ScalarType>> krausTasks;
+  std::vector<ReplayOp<ScalarType>> ops;
+
+  TrajectoryReplay() = default;
+  TrajectoryReplay(TrajectoryReplay &&) = default;
+  TrajectoryReplay &operator=(TrajectoryReplay &&) = default;
+  TrajectoryReplay(const TrajectoryReplay &) = delete;
+  TrajectoryReplay &operator=(const TrajectoryReplay &) = delete;
+};
+
+/// @brief Walk the PTSBE trace and build the site-ordered replay list for
+/// one trajectory. Gate entries become Gate ops referencing the corresponding
+/// task in `gateCache` (one entry per trace Gate instruction, in trace order,
+/// built once per batch by convertTraceGates), Noise entries are resolved to
+/// Gate ops owned by the returned replay via the trajectory selections, and
+/// Measurement, Reset, and MeasureReset entries become their op kinds
+/// carrying the site's qubits and record offset.
 ///
 /// @param includeIdentity When true, identity Kraus operators are
 ///   included as Gate ops. Useful if you require all trajectories to have
 ///   identical op structure.
 template <typename ScalarType>
-std::vector<ReplayOp<ScalarType>>
+TrajectoryReplay<ScalarType>
 mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
+                         std::span<const GateTask<ScalarType>> gateCache,
                          const cudaq::KrausTrajectory &trajectory,
                          bool includeIdentity = false);
 
@@ -89,7 +113,9 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
 /// selections, while Measurement, Reset, and MeasureReset entries are
 /// dropped. Only valid for terminal-measurement replay, where the simulator
 /// samples measurement qubits after applying all gates; traces with
-/// mid-circuit measurement or reset need mergeSitesWithTrajectory.
+/// mid-circuit measurement or reset need mergeSitesWithTrajectory. Converts
+/// the trace's gates on every call and returns owned copies; per-batch
+/// callers should build a gate cache once and use mergeSitesWithTrajectory.
 ///
 /// @param includeIdentity When true, identity Kraus operators are
 ///   included as gate tasks. Useful if you require all trajectories to have
@@ -109,11 +135,14 @@ namespace cudaq::ptsbe::detail {
 template <typename ScalarType>
 GateTask<ScalarType> convertToSimulatorTask(const TraceInstruction &inst);
 
-/// @brief Convert a PTSBE trace to a simulator task list, keeping only Gate
-/// entries (Noise and Measurement entries are skipped).
+/// @brief Build the per-batch gate cache: one converted simulator task per
+/// Gate instruction in the trace, in trace order (all other instruction
+/// types are skipped). mergeSitesWithTrajectory references this cache so
+/// each trace gate is converted once per batch instead of once per
+/// trajectory. The cache must outlive every TrajectoryReplay built from it.
 template <typename ScalarType>
 std::vector<GateTask<ScalarType>>
-convertTrace(std::span<const TraceInstruction> ptsbeTrace);
+convertTraceGates(std::span<const TraceInstruction> ptsbeTrace);
 
 /// @brief Convert a KrausSelection to a GateApplicationTask using the
 /// noise channel's unitary operators from the trace instruction.
@@ -134,8 +163,9 @@ GateTask<ScalarType> krausSelectionToTask(const cudaq::KrausSelection &sel,
 /// site-ordered op list from mergeSitesWithTrajectory: measurement sites
 /// collapse the state and write their bit into a fixed-width record string
 /// at the site's record offset, and reset sites return their qubits to |0>.
-/// Each shot's record becomes one count entry (and one sequential-data entry
-/// when requested).
+/// Each shot's record becomes one count entry and one sequential-data entry
+/// (mid-circuit batches always carry sequential data, a PTSBatch invariant
+/// enforced by samplePTSBE).
 ///
 /// Returns per-trajectory results for flexibility. Use aggregateResults()
 /// to combine into a single sample_result if needed.

@@ -13,13 +13,13 @@
 #include "cudaq/algorithms/sample.h"
 #include "cudaq/runtime/logger/logger.h"
 #include "cudaq/simulators.h"
-#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <iostream>
 #include <numeric>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace cudaq::ptsbe::detail {
 
@@ -66,14 +66,14 @@ void validatePTSBEPreconditions(quantum_platform &platform,
 std::vector<std::size_t>
 extractMeasureQubits(std::span<const TraceInstruction> trace) {
   std::vector<std::size_t> qubits;
+  std::unordered_set<std::size_t> seen;
   for (const auto &inst : trace) {
     if (inst.type != TraceInstructionType::Measurement &&
         inst.type != TraceInstructionType::MeasureReset)
       continue;
-    for (auto id : inst.targets) {
-      if (std::find(qubits.begin(), qubits.end(), id) == qubits.end())
+    for (auto id : inst.targets)
+      if (seen.insert(id).second)
         qubits.push_back(id);
-    }
   }
   return qubits;
 }
@@ -101,7 +101,7 @@ buildRecordLayout(std::span<const TraceInstruction> trace) {
           "PTSBE trace measurement site '" + inst.name + "' at position " +
           std::to_string(i) +
           " has no record_index; the trace was not built through "
-          "assignRecordIndices");
+          "buildPTSBETrace");
     const std::size_t base = *inst.record_index;
     const bool resets = inst.type == TraceInstructionType::MeasureReset;
     for (std::size_t k = 0; k < inst.targets.size(); ++k) {
@@ -140,15 +140,93 @@ measurementRegisterName(const cudaq::Trace::Instruction &inst) {
   return std::nullopt;
 }
 
+namespace {
+/// Mutable state threaded through the single-pass trace build: the emitted
+/// instructions, the index of the last emitted instruction touching each
+/// qubit (drives measure-then-reset fusion), and the next dense record index.
+struct TraceBuildState {
+  PTSBETrace result;
+  std::unordered_map<std::size_t, std::size_t> lastTouch;
+  std::size_t nextRecordIndex = 0;
+};
+} // namespace
+
+/// Append one instruction, updating last-touch tracking and, for measuring
+/// sites, assigning the next dense record index (one bit per target qubit).
+/// Record indices are the single source of the per-shot record layout shared
+/// by all execution paths, which write one record bit per target at
+/// record_index + k.
+static void emitInstruction(TraceBuildState &state, TraceInstruction inst) {
+  const std::size_t idx = state.result.size();
+  for (auto q : inst.targets)
+    state.lastTouch[q] = idx;
+  for (auto q : inst.controls)
+    state.lastTouch[q] = idx;
+  if (inst.type == TraceInstructionType::Measurement) {
+    inst.record_index = state.nextRecordIndex;
+    state.nextRecordIndex += inst.targets.size();
+  }
+  state.result.push_back(std::move(inst));
+}
+
+/// Resolve each channel to its unitary mixture and emit a Noise instruction
+/// on the given qubits. Empty channels are dropped.
+static void appendNoiseChannels(TraceBuildState &state,
+                                std::vector<cudaq::kraus_channel> &&channels,
+                                const std::vector<std::size_t> &qubits) {
+  for (auto &channel : channels) {
+    if (channel.empty())
+      continue;
+    if (!channel.is_unitary_mixture())
+      channel.generateUnitaryParameters();
+    auto parameters = channel.parameters;
+    emitInstruction(state, {TraceInstructionType::Noise,
+                            channel.get_type_name(),
+                            qubits,
+                            {},
+                            std::move(parameters),
+                            std::move(channel)});
+  }
+}
+
+/// Fuse a Reset into the preceding Measurement when that measurement is the
+/// last emitted instruction touching every reset target and covers exactly
+/// the same targets. The fused MeasureReset keeps the measurement's
+/// position, record index, and register name; the Reset is dropped.
+/// Instructions on other qubits may sit between the pair.
+static bool fuseResetIntoMeasurement(TraceBuildState &state,
+                                     const std::vector<std::size_t> &targets) {
+  if (targets.empty())
+    return false;
+  auto first = state.lastTouch.find(targets.front());
+  if (first == state.lastTouch.end())
+    return false;
+  const std::size_t measurementIdx = first->second;
+  for (auto q : targets) {
+    auto found = state.lastTouch.find(q);
+    if (found == state.lastTouch.end() || found->second != measurementIdx)
+      return false;
+  }
+  auto &candidate = state.result[measurementIdx];
+  if (candidate.type != TraceInstructionType::Measurement ||
+      candidate.targets != targets)
+    return false;
+  candidate.type = TraceInstructionType::MeasureReset;
+  return true;
+}
+
 static void convertTraceInstruction(const cudaq::Trace::Instruction &inst,
                                     const cudaq::noise_model &noise_model,
-                                    std::vector<TraceInstruction> &result) {
+                                    TraceBuildState &state) {
   auto targets = extractQubitIds(inst.targets);
   auto controls = extractQubitIds(inst.controls);
 
   if (inst.type == cudaq::TraceInstructionType::Reset) {
-    result.push_back({TraceInstructionType::Reset, inst.name, targets, controls,
-                      inst.params});
+    if (fuseResetIntoMeasurement(state, targets))
+      return;
+    emitInstruction(state,
+                    {TraceInstructionType::Reset, inst.name, std::move(targets),
+                     std::move(controls), inst.params});
     return;
   }
 
@@ -158,8 +236,9 @@ static void convertTraceInstruction(const cudaq::Trace::Instruction &inst,
     if (!channel.empty()) {
       if (!channel.is_unitary_mixture())
         channel.generateUnitaryParameters();
-      result.push_back({TraceInstructionType::Noise, inst.name, targets,
-                        controls, inst.params, std::move(channel)});
+      emitInstruction(state, {TraceInstructionType::Noise, inst.name,
+                              std::move(targets), std::move(controls),
+                              inst.params, std::move(channel)});
     }
     return;
   }
@@ -167,24 +246,12 @@ static void convertTraceInstruction(const cudaq::Trace::Instruction &inst,
   if (inst.type == cudaq::TraceInstructionType::Gate) {
     auto channels =
         noise_model.get_channels(inst.name, targets, controls, inst.params);
-    result.push_back({TraceInstructionType::Gate, inst.name, targets, controls,
-                      inst.params});
-
     std::vector<std::size_t> noiseQubits = targets;
     noiseQubits.insert(noiseQubits.end(), controls.begin(), controls.end());
-    for (auto &channel : channels) {
-      if (channel.empty())
-        continue;
-      if (!channel.is_unitary_mixture())
-        channel.generateUnitaryParameters();
-      auto parameters = channel.parameters;
-      result.push_back({TraceInstructionType::Noise,
-                        channel.get_type_name(),
-                        noiseQubits,
-                        {},
-                        std::move(parameters),
-                        std::move(channel)});
-    }
+    emitInstruction(state,
+                    {TraceInstructionType::Gate, inst.name, std::move(targets),
+                     std::move(controls), inst.params});
+    appendNoiseChannels(state, std::move(channels), noiseQubits);
     return;
   }
 
@@ -193,97 +260,28 @@ static void convertTraceInstruction(const cudaq::Trace::Instruction &inst,
     // the noisy state. This keeps terminal-only traces free of instructions
     // after their measurements (hasMidCircuitMeasurement stays false) and
     // gives site-ordered replay the correct semantics.
-    auto channels = noise_model.get_channels("mz", targets, {}, {});
-    for (auto &channel : channels) {
-      if (channel.empty())
-        continue;
-      if (!channel.is_unitary_mixture())
-        channel.generateUnitaryParameters();
-      auto parameters = channel.parameters;
-      result.push_back({TraceInstructionType::Noise,
-                        channel.get_type_name(),
-                        targets,
-                        {},
-                        std::move(parameters),
-                        std::move(channel)});
-    }
-
-    result.push_back({TraceInstructionType::Measurement,
-                      inst.name,
-                      targets,
-                      {},
-                      inst.params,
-                      std::nullopt,
-                      std::nullopt,
-                      measurementRegisterName(inst)});
+    appendNoiseChannels(state, noise_model.get_channels("mz", targets, {}, {}),
+                        targets);
+    emitInstruction(state, {TraceInstructionType::Measurement,
+                            inst.name,
+                            std::move(targets),
+                            {},
+                            inst.params,
+                            std::nullopt,
+                            std::nullopt,
+                            measurementRegisterName(inst)});
     return;
   }
 }
 
-static bool touchesAnyQubit(const TraceInstruction &inst,
-                            const std::vector<std::size_t> &qubits) {
-  auto touches = [&qubits](const std::vector<std::size_t> &ids) {
-    return std::any_of(ids.begin(), ids.end(), [&qubits](std::size_t id) {
-      return std::find(qubits.begin(), qubits.end(), id) != qubits.end();
-    });
-  };
-  return touches(inst.targets) || touches(inst.controls);
-}
-
-/// Fuse each Measurement whose next instruction touching its qubits is a
-/// Reset on exactly the same targets into a single MeasureReset site. The
-/// fused site keeps the measurement's position and fields; the consumed
-/// Reset is removed. Instructions on other qubits may sit between the pair.
-static void fuseMeasureResetSites(PTSBETrace &trace) {
-  std::vector<bool> consumed(trace.size(), false);
-  for (std::size_t i = 0; i < trace.size(); ++i) {
-    if (trace[i].type != TraceInstructionType::Measurement)
-      continue;
-    for (std::size_t j = i + 1; j < trace.size(); ++j) {
-      if (consumed[j] || !touchesAnyQubit(trace[j], trace[i].targets))
-        continue;
-      if (trace[j].type == TraceInstructionType::Reset &&
-          trace[j].targets == trace[i].targets) {
-        trace[i].type = TraceInstructionType::MeasureReset;
-        consumed[j] = true;
-      }
-      break;
-    }
-  }
-
-  std::size_t out = 0;
-  for (std::size_t i = 0; i < trace.size(); ++i) {
-    if (consumed[i])
-      continue;
-    if (out != i)
-      trace[out] = std::move(trace[i]);
-    ++out;
-  }
-  trace.resize(out);
-}
-
-/// Assign dense record indices in trace order to every Measurement and
-/// MeasureReset instruction, advancing by one bit per target qubit. This is
-/// the single source of the per-shot record layout shared by all execution
-/// paths, which write one record bit per target at record_index + k.
-static void assignRecordIndices(PTSBETrace &trace) {
-  std::size_t nextRecord = 0;
-  for (auto &inst : trace)
-    if (inst.type == TraceInstructionType::Measurement ||
-        inst.type == TraceInstructionType::MeasureReset) {
-      inst.record_index = nextRecord;
-      nextRecord += inst.targets.size();
-    }
-}
-
 PTSBETrace buildPTSBETrace(const cudaq::Trace &trace,
                            const cudaq::noise_model &noise_model) {
-  PTSBETrace result;
+  TraceBuildState state;
   bool hasMeasurement = false;
   for (const auto &inst : trace) {
     if (inst.type == cudaq::TraceInstructionType::Measurement)
       hasMeasurement = true;
-    convertTraceInstruction(inst, noise_model, result);
+    convertTraceInstruction(inst, noise_model, state);
   }
 
   // Match standard cudaq::sample() behavior: when the kernel omits explicit
@@ -294,27 +292,14 @@ PTSBETrace buildPTSBETrace(const cudaq::Trace &trace,
   auto n = trace.getNumQudits();
   if (!hasMeasurement && n > 0) {
     for (std::size_t q = 0; q < n; ++q) {
-      auto channels = noise_model.get_channels("mz", {q}, {}, {});
-      for (auto &channel : channels) {
-        if (channel.empty())
-          continue;
-        if (!channel.is_unitary_mixture())
-          channel.generateUnitaryParameters();
-        result.push_back({TraceInstructionType::Noise,
-                          channel.get_type_name(),
-                          {q},
-                          {},
-                          {},
-                          std::move(channel)});
-      }
-
-      result.push_back({TraceInstructionType::Measurement, "mz", {q}, {}, {}});
+      appendNoiseChannels(state, noise_model.get_channels("mz", {q}, {}, {}),
+                          {q});
+      emitInstruction(state,
+                      {TraceInstructionType::Measurement, "mz", {q}, {}, {}});
     }
   }
 
-  fuseMeasureResetSites(result);
-  assignRecordIndices(result);
-  return result;
+  return std::move(state.result);
 }
 
 PTSBEExecutionData
@@ -364,8 +349,11 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
   PTSBatch batch;
 
   batch.trace = std::move(trace);
-  batch.measureQubits = extractMeasureQubits(batch.trace);
   batch.hasMidCircuitMeasurement = hasMidCircuitMeasurement(batch.trace);
+  // Mid-circuit replay reads every measuring site from the trace, so the
+  // terminal measure-qubit list is only needed for terminal-only batches.
+  if (!batch.hasMidCircuitMeasurement)
+    batch.measureQubits = extractMeasureQubits(batch.trace);
   auto envMaxShotsPerPath = maxShotsPerPathEnvOverride();
   if (envMaxShotsPerPath)
     cudaq::info("[ptsbe] max shots per slot set to {} via "

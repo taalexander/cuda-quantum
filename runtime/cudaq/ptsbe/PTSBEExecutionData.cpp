@@ -38,23 +38,30 @@ std::size_t countInstructions(std::span<const TraceInstruction> trace,
 }
 
 bool hasMidCircuitMeasurement(std::span<const TraceInstruction> trace) {
-  std::vector<std::size_t> lastTouch(numQubits(trace), 0);
-  for (std::size_t i = 0; i < trace.size(); ++i) {
-    for (auto id : trace[i].targets)
-      lastTouch[id] = i;
-    for (auto id : trace[i].controls)
-      lastTouch[id] = i;
-  }
+  // Single backward walk: a measure or reset site is mid-circuit iff some
+  // later instruction touches one of its targets.
+  std::vector<bool> touchedLater;
+  const auto touched = [&touchedLater](std::size_t id) {
+    return id < touchedLater.size() && touchedLater[id];
+  };
+  const auto markTouched = [&touchedLater](std::size_t id) {
+    if (id >= touchedLater.size())
+      touchedLater.resize(id + 1, false);
+    touchedLater[id] = true;
+  };
 
-  for (std::size_t i = 0; i < trace.size(); ++i) {
-    const auto &inst = trace[i];
-    if (inst.type != TraceInstructionType::Measurement &&
-        inst.type != TraceInstructionType::MeasureReset &&
-        inst.type != TraceInstructionType::Reset)
-      continue;
+  for (auto it = trace.rbegin(); it != trace.rend(); ++it) {
+    const auto &inst = *it;
+    if (inst.type == TraceInstructionType::Measurement ||
+        inst.type == TraceInstructionType::MeasureReset ||
+        inst.type == TraceInstructionType::Reset)
+      for (auto id : inst.targets)
+        if (touched(id))
+          return true;
     for (auto id : inst.targets)
-      if (lastTouch[id] > i)
-        return true;
+      markTouched(id);
+    for (auto id : inst.controls)
+      markTouched(id);
   }
   return false;
 }
