@@ -46,6 +46,12 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
       replay.ops.emplace_back(&gateCache[gateIdx++]);
       break;
     case TraceInstructionType::Noise:
+      // Unitary-mixture noise was pre-sampled into the trajectory and is
+      // resolved through the selection loop below. Non-unitary channels are
+      // never pre-sampled; they branch during replay at their true
+      // state-dependent probabilities.
+      if (inst.channel && !inst.channel->is_unitary_mixture())
+        replay.ops.emplace_back(&inst.channel.value(), inst.targets);
       break;
     case TraceInstructionType::Measurement:
       replay.ops.emplace_back(ReplayOpKind::Measure, inst.targets,
@@ -248,6 +254,19 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
   if (!batch.hasMidCircuitMeasurement && batch.measureQubits.empty())
     return {};
 
+  // Replay-time Kraus branching needs per-branch state probabilities, which
+  // nvqir::CircuitSimulator does not expose. Only BatchSimulator backends
+  // execute non-unitary sites.
+  for (const auto &inst : batch.trace)
+    if (inst.type == TraceInstructionType::Noise && inst.channel &&
+        !inst.channel->is_unitary_mixture())
+      throw std::runtime_error(
+          "PTSBE generic replay does not support non-unitary Kraus channels "
+          "(channel '" +
+          inst.name +
+          "'). General Kraus sites branch at state-dependent probabilities "
+          "during replay, which requires a BatchSimulator backend.");
+
   const std::size_t numRecordBits =
       batch.hasMidCircuitMeasurement ? batch.numRecordBits() : 0;
 
@@ -327,6 +346,10 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
             for (auto qubit : op.qubits)
               simulator.resetQubit(qubit);
             break;
+          case ReplayOpKind::KrausBranch:
+            // Unreachable: non-unitary sites are rejected before replay.
+            throw std::runtime_error(
+                "PTSBE generic replay cannot execute a KrausBranch site.");
           }
         }
         simulator.flushGateQueue();

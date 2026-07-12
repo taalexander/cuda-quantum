@@ -46,7 +46,7 @@ using GateTask =
     typename nvqir::CircuitSimulatorBase<ScalarType>::GateApplicationTask;
 
 /// @brief Kind of operation replayed at one site of a merged trajectory.
-enum class ReplayOpKind { Gate, Measure, Reset, MeasureReset };
+enum class ReplayOpKind { Gate, Measure, Reset, MeasureReset, KrausBranch };
 
 /// @brief One site-ordered operation in a merged trajectory replay list.
 ///
@@ -55,13 +55,17 @@ enum class ReplayOpKind { Gate, Measure, Reset, MeasureReset };
 /// resolved Kraus selections live in the enclosing TrajectoryReplay. Measure,
 /// Reset, and MeasureReset ops carry the site's target qubits; measuring ops
 /// additionally carry the position of their bit in the per-shot measurement
-/// record.
+/// record. KrausBranch ops mark general (non-unitary) Kraus sites whose
+/// branch is selected during replay from its true state-dependent
+/// probabilities; they carry the site's qubits and a non-owning pointer to
+/// the raw channel in the caller's trace, which must outlive the replay.
 template <typename ScalarType>
 struct ReplayOp {
   ReplayOpKind kind;
   const GateTask<ScalarType> *task = nullptr;
   std::vector<std::size_t> qubits;
   std::optional<std::size_t> recordOffset;
+  const cudaq::kraus_channel *channel = nullptr;
 
   explicit ReplayOp(const GateTask<ScalarType> *gateTask)
       : kind(ReplayOpKind::Gate), task(gateTask) {}
@@ -69,6 +73,11 @@ struct ReplayOp {
   ReplayOp(ReplayOpKind kind, std::vector<std::size_t> qubits,
            std::optional<std::size_t> recordOffset)
       : kind(kind), qubits(std::move(qubits)), recordOffset(recordOffset) {}
+
+  ReplayOp(const cudaq::kraus_channel *branchChannel,
+           std::vector<std::size_t> qubits)
+      : kind(ReplayOpKind::KrausBranch), qubits(std::move(qubits)),
+        channel(branchChannel) {}
 };
 
 /// @brief Site-ordered replay list for one trajectory.
@@ -93,8 +102,10 @@ struct TrajectoryReplay {
 /// @brief Walk the PTSBE trace and build the site-ordered replay list for
 /// one trajectory. Gate entries become Gate ops referencing the corresponding
 /// task in `gateCache` (one entry per trace Gate instruction, in trace order,
-/// built once per batch by convertTraceGates), Noise entries are resolved to
-/// Gate ops owned by the returned replay via the trajectory selections, and
+/// built once per batch by convertTraceGates), unitary-mixture Noise entries
+/// are resolved to Gate ops owned by the returned replay via the trajectory
+/// selections, non-unitary Noise entries become KrausBranch ops referencing
+/// the raw channel in the trace (which must outlive the replay), and
 /// Measurement, Reset, and MeasureReset entries become their op kinds
 /// carrying the site's qubits and record offset.
 ///

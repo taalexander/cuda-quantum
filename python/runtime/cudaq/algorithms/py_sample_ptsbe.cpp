@@ -39,15 +39,20 @@ using namespace cudaq;
 // nanobind 2.x cannot dispatch NB_TYPE_CASTER-based parameters (MlirModule)
 // when nanobind::object appears in the same function signature. Use concrete
 // std::optional types for all nullable parameters instead.
-static ptsbe::sample_result pySamplePTSBE(
-    const std::string &shortName, MlirModule module,
-    cudaq::CompiledModule *compiled, std::size_t shots_count,
-    noise_model noiseModel, std::optional<std::size_t> max_trajectories,
-    std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
-        sampling_strategy,
-    std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
-    bool return_execution_data, bool include_sequential_data,
-    std::optional<std::size_t> max_shots_per_path, nanobind::args runtimeArgs) {
+static ptsbe::sample_result
+pySamplePTSBE(const std::string &shortName, MlirModule module,
+              cudaq::CompiledModule *compiled, std::size_t shots_count,
+              noise_model noiseModel,
+              std::optional<std::size_t> max_trajectories,
+              std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
+                  sampling_strategy,
+              std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
+              bool return_execution_data, bool include_sequential_data,
+              std::optional<std::size_t> max_shots_per_path,
+              std::optional<std::size_t> num_root_draws,
+              std::optional<std::size_t> max_paths_per_root,
+              std::optional<std::size_t> max_live_states,
+              bool allow_non_unitary, nanobind::args runtimeArgs) {
   if (shots_count == 0)
     return ptsbe::sample_result();
 
@@ -56,6 +61,10 @@ static ptsbe::sample_result pySamplePTSBE(
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
   ptsbe_options.max_shots_per_path = max_shots_per_path;
+  ptsbe_options.num_root_draws = num_root_draws;
+  ptsbe_options.max_paths_per_root = max_paths_per_root;
+  ptsbe_options.max_live_states = max_live_states;
+  ptsbe_options.allow_non_unitary = allow_non_unitary;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -111,20 +120,29 @@ struct AsyncPTSBESampleResultImpl {
 } // namespace
 
 /// @brief Run PTSBE sampling asynchronously from Python.
-static AsyncPTSBESampleResultImpl pySampleAsyncPTSBE(
-    const std::string &shortName, MlirModule module, std::size_t shots_count,
-    noise_model &noiseModel, std::optional<std::size_t> max_trajectories,
-    std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
-        sampling_strategy,
-    std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
-    bool return_execution_data, bool include_sequential_data,
-    std::optional<std::size_t> max_shots_per_path, nanobind::args runtimeArgs) {
+static AsyncPTSBESampleResultImpl
+pySampleAsyncPTSBE(const std::string &shortName, MlirModule module,
+                   std::size_t shots_count, noise_model &noiseModel,
+                   std::optional<std::size_t> max_trajectories,
+                   std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
+                       sampling_strategy,
+                   std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
+                   bool return_execution_data, bool include_sequential_data,
+                   std::optional<std::size_t> max_shots_per_path,
+                   std::optional<std::size_t> num_root_draws,
+                   std::optional<std::size_t> max_paths_per_root,
+                   std::optional<std::size_t> max_live_states,
+                   bool allow_non_unitary, nanobind::args runtimeArgs) {
 
   ptsbe::PTSBEOptions ptsbe_options;
   ptsbe_options.return_execution_data = return_execution_data;
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
   ptsbe_options.max_shots_per_path = max_shots_per_path;
+  ptsbe_options.num_root_draws = num_root_draws;
+  ptsbe_options.max_paths_per_root = max_paths_per_root;
+  ptsbe_options.max_live_states = max_live_states;
+  ptsbe_options.allow_non_unitary = allow_non_unitary;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -205,15 +223,21 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
       ptsbe, "ProbabilisticSamplingStrategy",
       "Sample trajectories randomly based on their occurrence probabilities.")
       .def(nanobind::init<std::optional<std::uint64_t>,
+                          std::optional<std::size_t>,
                           std::optional<std::size_t>>(),
            nanobind::arg("seed") = nanobind::none(),
            nanobind::arg("max_trajectory_samples") = nanobind::none(),
+           nanobind::arg("num_root_draws") = nanobind::none(),
            "Create a probabilistic strategy with optional random seed and "
            "max trajectory sample count. When seed is None (default), uses "
            "CUDA-Q's global random seed. "
            "max_trajectory_samples sets a ceiling on Monte Carlo draws. "
            "The loop stops early once max_trajectories unique patterns are "
-           "found. When None (default), a budget is auto-calculated.");
+           "found. When None (default), a budget is auto-calculated. "
+           "num_root_draws instead fixes the exact draw count; discovering "
+           "more than max_trajectories unique roots before the draws "
+           "complete is an error. Mutually exclusive with "
+           "max_trajectory_samples.");
 
   nanobind::class_<ptsbe::OrderedSamplingStrategy, ptsbe::PTSSamplingStrategy>(
       ptsbe, "OrderedSamplingStrategy",
@@ -464,7 +488,10 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
             nanobind::arg("return_execution_data"),
             nanobind::arg("include_sequential_data"),
             nanobind::arg("max_shots_per_path").none(),
-            nanobind::arg("arguments"),
+            nanobind::arg("num_root_draws").none(),
+            nanobind::arg("max_paths_per_root").none(),
+            nanobind::arg("max_live_states").none(),
+            nanobind::arg("allow_non_unitary"), nanobind::arg("arguments"),
             R"pbdoc(
 Run PTSBE sampling on the provided kernel.
 
@@ -479,9 +506,18 @@ Args:
   return_execution_data: Whether to include execution data in the result.
   include_sequential_data: Whether to populate per-shot sequential data.
   max_shots_per_path: Maximum shots per batch slot. None selects
-    automatically (1 with mid-circuit measurement or reset, unlimited
-    otherwise); 0 forces unlimited. The environment variable
-    CUDAQ_PTSBE_MAX_SHOTS_PER_PATH takes precedence.
+    automatically (1 with mid-circuit measurement or reset or when any
+    frontier knob is set, unlimited otherwise); 0 forces unlimited. The
+    environment variable CUDAQ_PTSBE_MAX_SHOTS_PER_PATH takes precedence.
+  num_root_draws: Fixed number of independent root draws performed before
+    deduplication, or None for strategy-controlled budgeting.
+  max_paths_per_root: Maximum replay paths sampled for one root, or None
+    for unbounded. Configurations requiring more paths are errors.
+  max_live_states: Maximum statevectors resident in one path group of the
+    branching frontier executor, or None to let the executor choose.
+  allow_non_unitary: Admit general (non-unitary) Kraus channels; branches
+    are selected during replay at their true state-dependent probabilities.
+    Requires a batched simulator backend.
   *arguments: The kernel arguments.
 
 Returns:
@@ -489,15 +525,19 @@ Returns:
 )pbdoc");
 
   // PTSBE async sample implementation
-  ptsbe.def(
-      "sample_async_impl", pySampleAsyncPTSBE, nanobind::arg("kernel_name"),
-      nanobind::arg("module"), nanobind::arg("shots_count"),
-      nanobind::arg("noise_model"), nanobind::arg("max_trajectories").none(),
-      nanobind::arg("sampling_strategy").none(),
-      nanobind::arg("shot_allocation").none(),
-      nanobind::arg("return_execution_data"),
-      nanobind::arg("include_sequential_data"),
-      nanobind::arg("max_shots_per_path").none(), nanobind::arg("arguments"),
-      "Run PTSBE sampling asynchronously. Returns an "
-      "AsyncSampleResultImpl.");
+  ptsbe.def("sample_async_impl", pySampleAsyncPTSBE,
+            nanobind::arg("kernel_name"), nanobind::arg("module"),
+            nanobind::arg("shots_count"), nanobind::arg("noise_model"),
+            nanobind::arg("max_trajectories").none(),
+            nanobind::arg("sampling_strategy").none(),
+            nanobind::arg("shot_allocation").none(),
+            nanobind::arg("return_execution_data"),
+            nanobind::arg("include_sequential_data"),
+            nanobind::arg("max_shots_per_path").none(),
+            nanobind::arg("num_root_draws").none(),
+            nanobind::arg("max_paths_per_root").none(),
+            nanobind::arg("max_live_states").none(),
+            nanobind::arg("allow_non_unitary"), nanobind::arg("arguments"),
+            "Run PTSBE sampling asynchronously. Returns an "
+            "AsyncSampleResultImpl.");
 }

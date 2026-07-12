@@ -36,12 +36,16 @@ cudaq::ptsbe::ProbabilisticSamplingStrategy::generateTrajectories(
     distributions.emplace_back(np.channel.probabilities.begin(),
                                np.channel.probabilities.end());
 
-  // MC draw budget. Either user-specified or auto-calculated.
-  // The loop stops once max_trajectories unique patterns are found,
-  // so this is a ceiling on draws.
+  // MC draw budget. With fixed root draws, exactly num_root_draws draws run
+  // and every draw contributes to a multiplicity. Otherwise the budget is
+  // user-specified or auto-calculated, and the loop stops early once
+  // max_trajectories unique patterns are found.
   constexpr std::size_t MAX_BUDGET_CAP = 500000;
+  const bool fixedDraws = num_root_draws_.has_value();
   std::size_t budget;
-  if (max_trajectory_samples_.has_value()) {
+  if (fixedDraws) {
+    budget = num_root_draws_.value();
+  } else if (max_trajectory_samples_.has_value()) {
     budget = max_trajectory_samples_.value();
   } else {
     std::size_t target = std::min(max_trajectories, total_possible);
@@ -63,6 +67,14 @@ cudaq::ptsbe::ProbabilisticSamplingStrategy::generateTrajectories(
     if (it != pattern_to_index.end()) {
       results[it->second].multiplicity++;
     } else {
+      if (fixedDraws && results.size() >= max_trajectories)
+        throw std::runtime_error(
+            "ProbabilisticSamplingStrategy: reached max_trajectories (" +
+            std::to_string(max_trajectories) + ") after " +
+            std::to_string(sample) + " of " +
+            std::to_string(num_root_draws_.value()) +
+            " fixed root draws. Fixed draws must all complete; raise "
+            "max_trajectories or lower num_root_draws.");
       std::vector<KrausSelection> selections;
       selections.reserve(noise_points.size());
       for (std::size_t i = 0; i < noise_points.size(); ++i) {
@@ -78,7 +90,7 @@ cudaq::ptsbe::ProbabilisticSamplingStrategy::generateTrajectories(
                             .setSelections(std::move(selections))
                             .setProbability(probability)
                             .build());
-      if (results.size() >= max_trajectories)
+      if (!fixedDraws && results.size() >= max_trajectories)
         break;
     }
   }
