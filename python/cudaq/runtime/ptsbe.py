@@ -16,8 +16,15 @@ from .utils import __isBroadcast, __createArgumentSet
 from cudaq.mlir._mlir_libs._quakeDialects.cudaq_runtime.ptsbe import *
 
 
-def _validate_ptsbe_args(kernel, args, shots_count, noise_model,
-                         max_trajectories, max_shots_per_path):
+def _validate_ptsbe_args(kernel,
+                         args,
+                         shots_count,
+                         noise_model,
+                         max_trajectories,
+                         max_shots_per_path,
+                         num_root_draws=None,
+                         max_paths_per_root=None,
+                         max_live_states=None):
     """Validate arguments common to `sample` and `sample_async`."""
     decorator = kernel
     if not isa_kernel_decorator(decorator):
@@ -50,6 +57,14 @@ def _validate_ptsbe_args(kernel, args, shots_count, noise_model,
                 "Invalid `max_shots_per_path`. Must be a non-negative "
                 "integer.")
 
+    for name, value in (("num_root_draws", num_root_draws),
+                        ("max_paths_per_root", max_paths_per_root),
+                        ("max_live_states", max_live_states)):
+        if value is not None:
+            if (not isinstance(value, int)) or (value < 1):
+                raise RuntimeError("Invalid `" + name +
+                                   "`. Must be a positive integer.")
+
     _detail_check_conditionals_on_measure(decorator)
 
     return decorator
@@ -65,7 +80,11 @@ def sample(kernel,
            shot_allocation=None,
            return_execution_data=False,
            include_sequential_data=False,
-           max_shots_per_path=None):
+           max_shots_per_path=None,
+           num_root_draws=None,
+           max_paths_per_root=None,
+           max_live_states=None,
+           allow_non_unitary=False):
     """
     Sample using Pre-Trajectory Sampling with Batch Execution (`PTSBE`).
 
@@ -100,9 +119,26 @@ def sample(kernel,
           kernel contains mid-circuit measurement or reset.
       max_shots_per_path (int or ``None``): Maximum shots executed per batch
           slot. ``None`` (default) selects automatically: 1 when the kernel
-          contains mid-circuit measurement or reset, unlimited otherwise.
-          0 forces unlimited. The environment variable
+          contains mid-circuit measurement or reset or when any frontier
+          knob (``num_root_draws``, ``max_paths_per_root``,
+          ``max_live_states``) is set, unlimited otherwise. 0 forces
+          unlimited. The environment variable
           ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.
+      num_root_draws (int or ``None``): Fixed number of independent root
+          draws performed before deduplication. Shot allocation becomes the
+          exact root-weight split; configurations that cannot satisfy the
+          flat-result integer conditions raise errors rather than being
+          silently adjusted. ``None`` keeps strategy-controlled budgeting.
+      max_paths_per_root (int or ``None``): Maximum replay paths sampled for
+          one root. Configurations requiring more paths raise errors.
+          ``None`` means unbounded.
+      max_live_states (int or ``None``): Maximum statevectors resident in
+          one path group of the branching frontier executor. ``None`` lets
+          the executor choose its capacity.
+      allow_non_unitary (bool): Admit general (non-unitary) Kraus channels.
+          Admitted channels keep their raw operators and branch during
+          replay at their true state-dependent probabilities. Requires a
+          batched simulator backend. Defaults to ``False``.
 
     Returns:
       ``SampleResult``: Measurement results. Returns a list of results
@@ -122,7 +158,9 @@ def sample(kernel,
       RuntimeError: If the kernel is invalid or arguments are invalid.
     """
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
-                                     max_trajectories, max_shots_per_path)
+                                     max_trajectories, max_shots_per_path,
+                                     num_root_draws, max_paths_per_root,
+                                     max_live_states)
 
     if noise_model is None:
         noise_model = cudaq_runtime.NoiseModel()
@@ -137,7 +175,8 @@ def sample(kernel,
                 decorator.uniqName, module, compiled, shots_count, noise_model,
                 max_trajectories, sampling_strategy, shot_allocation,
                 return_execution_data, include_sequential_data,
-                max_shots_per_path, *processedArgs)
+                max_shots_per_path, num_root_draws, max_paths_per_root,
+                max_live_states, allow_non_unitary, *processedArgs)
             results.append(result)
         return results
 
@@ -147,6 +186,7 @@ def sample(kernel,
         decorator.uniqName, module, compiled, shots_count, noise_model,
         max_trajectories, sampling_strategy, shot_allocation,
         return_execution_data, include_sequential_data, max_shots_per_path,
+        num_root_draws, max_paths_per_root, max_live_states, allow_non_unitary,
         *processedArgs)
 
 
@@ -160,7 +200,11 @@ def sample_async(kernel,
                  shot_allocation=None,
                  return_execution_data=False,
                  include_sequential_data=False,
-                 max_shots_per_path=None):
+                 max_shots_per_path=None,
+                 num_root_draws=None,
+                 max_paths_per_root=None,
+                 max_live_states=None,
+                 allow_non_unitary=False):
     """
     Asynchronously sample using PTSBE. Returns a future whose result
     can be retrieved via ``.get()``.
@@ -183,6 +227,14 @@ def sample_async(kernel,
       max_shots_per_path (int or ``None``): Maximum shots per batch slot.
           ``None`` selects automatically; 0 forces unlimited. The environment
           variable ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.
+      num_root_draws (int or ``None``): Fixed number of independent root
+          draws before deduplication; see ``sample``.
+      max_paths_per_root (int or ``None``): Maximum replay paths per root;
+          see ``sample``.
+      max_live_states (int or ``None``): Maximum resident statevectors per
+          path group; see ``sample``.
+      allow_non_unitary (bool): Admit general (non-unitary) Kraus channels;
+          see ``sample``.
 
     Returns:
       ``AsyncPTSBESampleResult``: A future whose ``.get()`` returns the
@@ -192,7 +244,9 @@ def sample_async(kernel,
       RuntimeError: If the kernel is invalid or arguments are invalid.
     """
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
-                                     max_trajectories, max_shots_per_path)
+                                     max_trajectories, max_shots_per_path,
+                                     num_root_draws, max_paths_per_root,
+                                     max_live_states)
 
     if noise_model is None:
         noise_model = cudaq_runtime.NoiseModel()
@@ -202,6 +256,7 @@ def sample_async(kernel,
     impl = cudaq_runtime.ptsbe.sample_async_impl(
         decorator.uniqName, module, shots_count, noise_model, max_trajectories,
         sampling_strategy, shot_allocation, return_execution_data,
-        include_sequential_data, max_shots_per_path, *processedArgs)
+        include_sequential_data, max_shots_per_path, num_root_draws,
+        max_paths_per_root, max_live_states, allow_non_unitary, *processedArgs)
 
     return AsyncSampleResult(impl, module)

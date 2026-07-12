@@ -37,6 +37,12 @@ struct NoisePoint {
   /// @brief Validated noise channel containing Kraus operators and
   /// probabilities
   cudaq::kraus_channel channel;
+
+  /// @brief True when the channel is a general (non-unitary) Kraus channel
+  /// admitted via PTSBEOptions::allow_non_unitary. Such sites keep their raw
+  /// operators, are excluded from root pre-sampling, and branch at their
+  /// true state-dependent probabilities during replay.
+  bool is_non_unitary = false;
 };
 
 /// @brief Compute total trajectory space with overflow protection

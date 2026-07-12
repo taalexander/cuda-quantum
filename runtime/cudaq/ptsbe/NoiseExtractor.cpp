@@ -26,7 +26,7 @@ void throwUnitaryMixtureError(const std::string &channel_name,
 
 NoiseExtractionResult
 extractNoiseSites(std::span<const TraceInstruction> ptsbeTrace,
-                  bool validate_unitary_mixture) {
+                  bool validate_unitary_mixture, bool allow_non_unitary) {
   NoiseExtractionResult result;
   result.total_instructions = ptsbeTrace.size();
   result.noisy_instructions = 0;
@@ -41,9 +41,10 @@ extractNoiseSites(std::span<const TraceInstruction> ptsbeTrace,
       continue;
 
     const auto &channel = inst.channel.value();
-    if (!channel.is_unitary_mixture()) {
+    const bool nonUnitary = !channel.is_unitary_mixture();
+    if (nonUnitary) {
       result.all_unitary_mixtures = false;
-      if (validate_unitary_mixture)
+      if (!allow_non_unitary && validate_unitary_mixture)
         throwUnitaryMixtureError(inst.name, i);
     }
 
@@ -52,6 +53,7 @@ extractNoiseSites(std::span<const TraceInstruction> ptsbeTrace,
     point.op_name = inst.name;
     point.qubits = inst.targets;
     point.channel = channel;
+    point.is_non_unitary = nonUnitary;
     result.noise_sites.push_back(std::move(point));
     result.noisy_instructions++;
   }

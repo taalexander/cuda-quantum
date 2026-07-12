@@ -12,6 +12,7 @@
 #include "cudaq/algorithms/broadcast.h"
 #include <optional>
 #include <random>
+#include <stdexcept>
 
 namespace cudaq::ptsbe {
 
@@ -29,13 +30,28 @@ public:
   /// multiplicity, preserving unbiased MC estimation.
   /// When `nullopt` (default), a budget is auto-calculated as a small
   /// multiplier of max_trajectories.
+  /// @param num_root_draws Fixed number D of independent root draws.
+  /// When set, generateTrajectories performs exactly D draws and then
+  /// deduplicates, so multiplicities sum to D; discovering more than
+  /// max_trajectories unique roots before the draws complete is an error,
+  /// not a stopping rule. Mutually exclusive with max_trajectory_samples.
+  /// @throws std::invalid_argument if both max_trajectory_samples and
+  /// num_root_draws are set
   explicit ProbabilisticSamplingStrategy(
       std::optional<std::uint64_t> seed = std::nullopt,
-      std::optional<std::size_t> max_trajectory_samples = std::nullopt)
+      std::optional<std::size_t> max_trajectory_samples = std::nullopt,
+      std::optional<std::size_t> num_root_draws = std::nullopt)
       : rng_(seed.value_or(cudaq::get_random_seed() != 0
                                ? cudaq::get_random_seed()
                                : std::random_device{}())),
-        max_trajectory_samples_(max_trajectory_samples) {}
+        max_trajectory_samples_(max_trajectory_samples),
+        num_root_draws_(num_root_draws) {
+    if (max_trajectory_samples_ && num_root_draws_)
+      throw std::invalid_argument(
+          "ProbabilisticSamplingStrategy: max_trajectory_samples and "
+          "num_root_draws are mutually exclusive; fixed root draws define "
+          "the exact draw count.");
+  }
 
   /// @brief Destructor
   ~ProbabilisticSamplingStrategy() override;
@@ -65,6 +81,7 @@ public:
 private:
   mutable std::mt19937_64 rng_;
   std::optional<std::size_t> max_trajectory_samples_;
+  std::optional<std::size_t> num_root_draws_;
 };
 
 } // namespace cudaq::ptsbe

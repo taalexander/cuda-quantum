@@ -41,14 +41,18 @@ struct NoiseExtractionResult {
 /// noise sites with their trace positions as circuit_location.
 ///
 /// @param ptsbeTrace PTSBE trace from buildPTSBETrace
-///                                 unitary mixture (default: true). PTSBE
-///                                 requires all channels to be unitary
-///                                 mixtures.
+/// @param validate_unitary_mixture Throw when a channel that is not a
+///        unitary mixture is found and non-unitary admission is off
+///        (default: true)
+/// @param allow_non_unitary Admit general Kraus channels instead of
+///        rejecting them: the NoisePoint keeps the channel's raw operators
+///        and is marked is_non_unitary (default: false)
 /// @return NoiseExtractionResult containing ordered noise sites and statistics
-/// @throws std::invalid_argument if a channel cannot be converted to a unitary
-///         mixture
+/// @throws std::invalid_argument if a channel is not a unitary mixture and
+///         allow_non_unitary is false while validate_unitary_mixture is true
 [[nodiscard]] NoiseExtractionResult
 extractNoiseSites(std::span<const TraceInstruction> ptsbeTrace,
-                  bool validate_unitary_mixture = true);
+                  bool validate_unitary_mixture = true,
+                  bool allow_non_unitary = false);
 
 } // namespace cudaq::ptsbe::detail
