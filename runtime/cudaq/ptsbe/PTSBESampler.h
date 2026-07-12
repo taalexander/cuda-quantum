@@ -32,7 +32,10 @@ struct PTSBatch {
   std::vector<std::size_t> measureQubits;
 
   /// @brief Populate per-shot sequential bitstring data on the result. When
-  /// false (default), only aggregated counts are produced.
+  /// false (default), only aggregated counts are produced. Invariant: always
+  /// true when hasMidCircuitMeasurement is set, since mid-circuit replay
+  /// carries its per-shot records on the sequential-data channel
+  /// (buildPTSBatchFromTrace forces it on; samplePTSBE rejects violations).
   bool includeSequentialData = false;
 
   /// @brief True when the trace contains mid-circuit measurement or reset:
@@ -51,6 +54,12 @@ struct PTSBatch {
 
   /// @brief Calculate total shots across all trajectories
   std::size_t totalShots() const;
+
+  /// @brief Canonical width of the per-shot measurement record: one bit per
+  /// target qubit of every measuring site in the trace. Derived from the
+  /// last measuring instruction, since buildPTSBETrace assigns record
+  /// indices densely in trace order.
+  std::size_t numRecordBits() const;
 };
 
 } // namespace cudaq::ptsbe

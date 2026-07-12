@@ -13,7 +13,7 @@
 
 using namespace cudaq;
 
-/// Verify convertTrace handles multi-gate PTSBE trace correctly
+/// Verify convertTraceGates handles multi-gate PTSBE trace correctly
 CUDAQ_TEST(MergeTasksWithTrajectoryTest, ConvertTraceMultiGate) {
   std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
       {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
@@ -21,7 +21,7 @@ CUDAQ_TEST(MergeTasksWithTrajectoryTest, ConvertTraceMultiGate) {
       {ptsbe::TraceInstructionType::Gate, "x", {1}, {0}, {}},
   };
 
-  auto tasks = cudaq::ptsbe::detail::convertTrace<double>(ptsbeTrace);
+  auto tasks = cudaq::ptsbe::detail::convertTraceGates<double>(ptsbeTrace);
 
   ASSERT_EQ(tasks.size(), 3u);
 
@@ -42,14 +42,14 @@ CUDAQ_TEST(MergeTasksWithTrajectoryTest, ConvertTraceMultiGate) {
   EXPECT_EQ(tasks[2].targets[0], 1u);
 }
 
-/// Verify convertTrace preserves gate parameters
+/// Verify convertTraceGates preserves gate parameters
 CUDAQ_TEST(MergeTasksWithTrajectoryTest, ConvertTracePreservesParameters) {
   std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
       {ptsbe::TraceInstructionType::Gate, "rx", {0}, {}, {M_PI / 2}},
       {ptsbe::TraceInstructionType::Gate, "rz", {1}, {}, {M_PI / 4}},
   };
 
-  auto tasks = cudaq::ptsbe::detail::convertTrace<double>(ptsbeTrace);
+  auto tasks = cudaq::ptsbe::detail::convertTraceGates<double>(ptsbeTrace);
 
   ASSERT_EQ(tasks.size(), 2u);
   EXPECT_EQ(tasks[0].parameters.size(), 1u);
@@ -58,7 +58,7 @@ CUDAQ_TEST(MergeTasksWithTrajectoryTest, ConvertTracePreservesParameters) {
   EXPECT_NEAR(tasks[1].parameters[0], M_PI / 4, 1e-12);
 }
 
-/// Verify convertTrace skips Noise and Measurement entries
+/// Verify convertTraceGates skips Noise and Measurement entries
 CUDAQ_TEST(MergeTasksWithTrajectoryTest, ConvertTraceSkipsNoiseAndMeasurement) {
   std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
       {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
@@ -72,7 +72,7 @@ CUDAQ_TEST(MergeTasksWithTrajectoryTest, ConvertTraceSkipsNoiseAndMeasurement) {
       {ptsbe::TraceInstructionType::Measurement, "mz", {0, 1}, {}, {}},
   };
 
-  auto tasks = cudaq::ptsbe::detail::convertTrace<double>(ptsbeTrace);
+  auto tasks = cudaq::ptsbe::detail::convertTraceGates<double>(ptsbeTrace);
 
   ASSERT_EQ(tasks.size(), 2u);
   EXPECT_EQ(tasks[0].operationName, "h");
@@ -272,7 +272,7 @@ CUDAQ_TEST(MergeTasksWithTrajectoryTest, MixedIdentityAndErrorNoise) {
 CUDAQ_TEST(MergeTasksWithTrajectoryTest, EmptyTrace) {
   std::vector<ptsbe::TraceInstruction> ptsbeTrace;
 
-  auto tasks = cudaq::ptsbe::detail::convertTrace<double>(ptsbeTrace);
+  auto tasks = cudaq::ptsbe::detail::convertTraceGates<double>(ptsbeTrace);
   EXPECT_TRUE(tasks.empty());
 
   KrausTrajectory trajectory(0, {}, 1.0, 100);

@@ -285,6 +285,33 @@ CUDAQ_TEST(McmReplayTest, RecordsDecorrelatedAcrossShotsOfOneTrajectory) {
 }
 
 // ============================================================================
+// PTSBatch UNIT TESTS
+// ============================================================================
+
+// PTSBatch is a public struct, so hand-built traces may carry record
+// indices in any order. The record width is the maximum over all measuring
+// instructions of record_index + target count; deriving it from the last
+// measuring instruction would under-size the per-shot record and the replay
+// loop would then write past the end of the record string.
+CUDAQ_TEST(McmReplayTest, NumRecordBitsIsMaxOverAllMeasuringInstructions) {
+  PTSBatch batch;
+  batch.trace = {
+      {TraceInstructionType::Measurement, "mz", {0}, {}, {}, std::nullopt, 2},
+      {TraceInstructionType::Gate, "x", {1}, {}, {}},
+      {TraceInstructionType::Measurement, "mz", {1}, {}, {}, std::nullopt, 0},
+  };
+  EXPECT_EQ(batch.numRecordBits(), 3u);
+}
+
+CUDAQ_TEST(McmReplayTest, NumRecordBitsIsZeroWithoutMeasuringInstructions) {
+  PTSBatch batch;
+  batch.trace = {
+      {TraceInstructionType::Gate, "h", {0}, {}, {}},
+  };
+  EXPECT_EQ(batch.numRecordBits(), 0u);
+}
+
+// ============================================================================
 // mergeSitesWithTrajectory UNIT TESTS
 // ============================================================================
 
@@ -321,17 +348,19 @@ CUDAQ_TEST(McmReplayTest, MergeSitesEmitsOpKindsInTraceOrder) {
       cudaq::KrausSelection(1, {0}, "h", 3, true)};
   cudaq::KrausTrajectory trajectory(0, selections, 0.1, 10);
 
-  auto ops = mergeSitesWithTrajectory<double>(trace, trajectory);
+  auto gateCache = detail::convertTraceGates<double>(trace);
+  auto replay = mergeSitesWithTrajectory<double>(trace, gateCache, trajectory);
+  const auto &ops = replay.ops;
 
   ASSERT_EQ(ops.size(), 7u);
   EXPECT_EQ(ops[0].kind, ReplayOpKind::Gate);
-  EXPECT_EQ(ops[0].task.operationName, "h");
+  EXPECT_EQ(ops[0].task->operationName, "h");
   EXPECT_EQ(ops[1].kind, ReplayOpKind::Gate);
-  EXPECT_EQ(ops[1].task.operationName, "z");
+  EXPECT_EQ(ops[1].task->operationName, "z");
   EXPECT_EQ(ops[2].kind, ReplayOpKind::MeasureReset);
   EXPECT_EQ(ops[2].qubits, (std::vector<std::size_t>{0}));
   EXPECT_EQ(ops[3].kind, ReplayOpKind::Gate);
-  EXPECT_EQ(ops[3].task.operationName, "x");
+  EXPECT_EQ(ops[3].task->operationName, "x");
   EXPECT_EQ(ops[4].kind, ReplayOpKind::Measure);
   EXPECT_EQ(ops[4].qubits, (std::vector<std::size_t>{0}));
   EXPECT_EQ(ops[5].kind, ReplayOpKind::Reset);
@@ -346,7 +375,9 @@ CUDAQ_TEST(McmReplayTest, MergeSitesRecordOffsetsMatchTraceRecordIndices) {
   auto trace = makeSiteTrace();
   cudaq::KrausTrajectory trajectory(0, {}, 1.0, 10);
 
-  auto ops = mergeSitesWithTrajectory<double>(trace, trajectory);
+  auto gateCache = detail::convertTraceGates<double>(trace);
+  auto replay = mergeSitesWithTrajectory<double>(trace, gateCache, trajectory);
+  const auto &ops = replay.ops;
 
   ASSERT_EQ(ops.size(), 6u);
   EXPECT_FALSE(ops[0].recordOffset.has_value());
@@ -393,10 +424,13 @@ CUDAQ_TEST(McmReplayTest, MergeSitesIncludeIdentityKeepsSlotAlignment) {
       cudaq::KrausSelection(4, {1}, "x", 3, true)};
   cudaq::KrausTrajectory errorTrajectory(1, errorSelections, 0.01, 1);
 
-  auto identityOps = mergeSitesWithTrajectory<double>(trace, identityTrajectory,
-                                                      /*includeIdentity=*/true);
-  auto errorOps = mergeSitesWithTrajectory<double>(trace, errorTrajectory,
-                                                   /*includeIdentity=*/true);
+  auto gateCache = detail::convertTraceGates<double>(trace);
+  auto identityReplay = mergeSitesWithTrajectory<double>(
+      trace, gateCache, identityTrajectory, /*includeIdentity=*/true);
+  auto errorReplay = mergeSitesWithTrajectory<double>(
+      trace, gateCache, errorTrajectory, /*includeIdentity=*/true);
+  const auto &identityOps = identityReplay.ops;
+  const auto &errorOps = errorReplay.ops;
 
   ASSERT_EQ(identityOps.size(), 6u);
   ASSERT_EQ(errorOps.size(), identityOps.size());
@@ -406,11 +440,13 @@ CUDAQ_TEST(McmReplayTest, MergeSitesIncludeIdentityKeepsSlotAlignment) {
         << "slot " << i;
   }
   EXPECT_EQ(identityOps[1].kind, ReplayOpKind::Gate);
-  EXPECT_EQ(errorOps[1].task.operationName, "x");
-  EXPECT_EQ(errorOps[4].task.operationName, "z");
+  EXPECT_EQ(errorOps[1].task->operationName, "x");
+  EXPECT_EQ(errorOps[4].task->operationName, "z");
 
   // Without includeIdentity the identity trajectory drops its noise slots.
-  auto compactOps = mergeSitesWithTrajectory<double>(trace, identityTrajectory);
+  auto compactReplay =
+      mergeSitesWithTrajectory<double>(trace, gateCache, identityTrajectory);
+  const auto &compactOps = compactReplay.ops;
   ASSERT_EQ(compactOps.size(), 4u);
   EXPECT_EQ(compactOps[0].kind, ReplayOpKind::Gate);
   EXPECT_EQ(compactOps[1].kind, ReplayOpKind::Measure);
@@ -437,11 +473,12 @@ CUDAQ_TEST(McmReplayTest, LegacyMergeTasksReturnsSameGateList) {
   EXPECT_EQ(tasks[2].operationName, "x");
 
   // The Gate subsequence of the replay-op list is the same gate list.
-  auto ops = mergeSitesWithTrajectory<double>(trace, trajectory);
+  auto gateCache = detail::convertTraceGates<double>(trace);
+  auto replay = mergeSitesWithTrajectory<double>(trace, gateCache, trajectory);
   std::vector<std::string> gateNames;
-  for (const auto &op : ops)
+  for (const auto &op : replay.ops)
     if (op.kind == ReplayOpKind::Gate)
-      gateNames.push_back(op.task.operationName);
+      gateNames.push_back(op.task->operationName);
   EXPECT_EQ(gateNames, (std::vector<std::string>{"h", "z", "x"}));
 }
 
