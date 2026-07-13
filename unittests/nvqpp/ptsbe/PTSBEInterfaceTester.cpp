@@ -55,10 +55,7 @@ CUDAQ_TEST(PTSBEInterfaceTest, PTSBatchWithTrajectories) {
     batch.trajectories.push_back(traj);
   }
 
-  batch.measureQubits = {0, 1, 2};
-
   EXPECT_EQ(batch.trajectories.size(), 5);
-  EXPECT_EQ(batch.measureQubits.size(), 3);
   EXPECT_EQ(batch.trajectories[2].num_shots, 600);
 }
 
@@ -122,7 +119,6 @@ CUDAQ_TEST(PTSBEInterfaceTest, EmptyBatch) {
   ptsbe::PTSBatch batch;
 
   EXPECT_TRUE(batch.trajectories.empty());
-  EXPECT_TRUE(batch.measureQubits.empty());
 }
 
 /// Test: Clean trajectory without noise
@@ -140,7 +136,6 @@ CUDAQ_TEST(PTSBEInterfaceTest, CleanTrajectory) {
 CUDAQ_TEST(PTSBEInterfaceTest, RuntimeDispatchCallsMock) {
   MockBatchSimulator ptsbe_sim;
   ptsbe::PTSBatch batch;
-  batch.measureQubits = {0, 1};
 
   ptsbe_sim.sampleWithPTSBE(batch);
   EXPECT_TRUE(ptsbe_sim.sampleWithPTSBE_called);

@@ -21,10 +21,13 @@ using namespace cudaq;
 using QppSimulator =
     QppCircuitSimulatorTester<nvqir::QppCircuitSimulator<qpp::ket>>;
 
+// Gate-only trace with no measurement site: terminal-only execution derives an
+// empty measure-qubit list from the trace and returns no results.
 const ptsbe::PTSBETrace kHadamardTrace = {
     {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}}};
 const ptsbe::PTSBETrace kXTrace = {
-    {ptsbe::TraceInstructionType::Gate, "x", {0}, {}, {}}};
+    {ptsbe::TraceInstructionType::Gate, "x", {0}, {}, {}},
+    {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}}};
 
 /// samplePTSBEGeneric throws without ExecutionContext
 CUDAQ_TEST(ExecutePTSBETest, ThrowsWithoutExecutionContext) {
@@ -32,7 +35,6 @@ CUDAQ_TEST(ExecutePTSBETest, ThrowsWithoutExecutionContext) {
 
   ptsbe::PTSBatch batch;
   batch.trace = kHadamardTrace;
-  batch.measureQubits = {0};
 
   KrausTrajectory traj(0, {}, 1.0, 10);
   batch.trajectories.push_back(traj);
@@ -72,8 +74,10 @@ CUDAQ_TEST(ExecutePTSBETest, SingleTrajectoryHadamard) {
   cudaq::set_random_seed(42);
 
   ptsbe::PTSBatch batch;
-  batch.trace = kHadamardTrace;
-  batch.measureQubits = {0};
+  batch.trace = {
+      {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
+  };
 
   KrausTrajectory traj(0, {}, 1.0, 100);
   batch.trajectories.push_back(traj);
@@ -93,7 +97,6 @@ CUDAQ_TEST(ExecutePTSBETest, MultipleTrajectoryAggregation) {
 
   ptsbe::PTSBatch batch;
   batch.trace = kXTrace;
-  batch.measureQubits = {0};
 
   KrausTrajectory traj1(0, {}, 0.7, 7);
   KrausTrajectory traj2(1, {}, 0.3, 3);
@@ -115,8 +118,10 @@ CUDAQ_TEST(ExecutePTSBETest, MultipleTrajectoryAggregation) {
 CUDAQ_TEST(ExecutePTSBETest, ZeroShotTrajectoryReturnsEmptyResult) {
 
   ptsbe::PTSBatch batch;
-  batch.trace = {{ptsbe::TraceInstructionType::Gate, "y", {0}, {}, {}}};
-  batch.measureQubits = {0};
+  batch.trace = {
+      {ptsbe::TraceInstructionType::Gate, "y", {0}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
+  };
 
   KrausTrajectory zeroShot(0, {}, 0.5, 0);
   KrausTrajectory normalShot(1, {}, 0.5, 10);
@@ -134,24 +139,24 @@ CUDAQ_TEST(ExecutePTSBETest, ZeroShotTrajectoryReturnsEmptyResult) {
   EXPECT_EQ(result.count("1"), 10u);
 }
 
-/// Empty inputs (trajectories or measureQubits) should return empty result
+/// Empty inputs (no trajectories, or a trace with no measurement site) should
+/// return empty result
 CUDAQ_TEST(ExecutePTSBETest, EmptyInputsReturnEmpty) {
 
   // Test 1: Empty trajectories vector
   {
     ptsbe::PTSBatch batch;
     batch.trace = kHadamardTrace;
-    batch.measureQubits = {0};
 
     auto results = ptsbe::detail::samplePTSBEWithLifecycle(batch);
     EXPECT_TRUE(results.empty());
   }
 
-  // Test 2: Empty measureQubits
+  // Test 2: Gate-only trace with no measurement site derives an empty
+  // measure-qubit list, so terminal-only execution returns no results.
   {
     ptsbe::PTSBatch batch;
     batch.trace = kHadamardTrace;
-    batch.measureQubits = {};
 
     KrausTrajectory traj(0, {}, 1.0, 10);
     batch.trajectories.push_back(traj);
@@ -169,8 +174,9 @@ CUDAQ_TEST(ExecutePTSBETest, BellStateDistribution) {
   batch.trace = {
       {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
       {ptsbe::TraceInstructionType::Gate, "x", {1}, {0}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {1}, {}, {}},
   };
-  batch.measureQubits = {0, 1};
 
   KrausTrajectory traj(0, {}, 1.0, 100);
   batch.trajectories.push_back(traj);
@@ -201,8 +207,8 @@ CUDAQ_TEST(ExecutePTSBETest, TrajectoryWithNoiseInsertion) {
        {},
        {},
        depolarization_channel(0.1)},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
   };
-  batch.measureQubits = {0};
 
   // Trajectory with X error (index 1) at trace position 1
   std::vector<KrausSelection> selections = {
@@ -231,8 +237,9 @@ CUDAQ_TEST(ExecutePTSBETest, MultiQubitWithSelectiveNoise) {
        {},
        depolarization_channel(0.1)},
       {ptsbe::TraceInstructionType::Gate, "x", {1}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {1}, {}, {}},
   };
-  batch.measureQubits = {0, 1};
 
   // Trajectory 1: identity noise (no error), should give "11"
   std::vector<KrausSelection> selectionsId = {KrausSelection(1, {0}, "x", 0)};
@@ -262,8 +269,8 @@ CUDAQ_TEST(ExecutePTSBETest, PartialMeasurement) {
   batch.trace = {
       {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
       {ptsbe::TraceInstructionType::Gate, "x", {1}, {0}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
   };
-  batch.measureQubits = {0};
 
   KrausTrajectory traj(0, {}, 1.0, 100);
   batch.trajectories.push_back(traj);
@@ -278,20 +285,23 @@ CUDAQ_TEST(ExecutePTSBETest, PartialMeasurement) {
   EXPECT_EQ(count0 + count1, 100u);
 }
 
-/// Measurement order: verify that measureQubits order affects bitstring order
+/// Measurement order: verify that measurement-site order in the trace drives
+/// the terminal bitstring order.
 CUDAQ_TEST(ExecutePTSBETest, MeasurementOrderAffectsBitstring) {
 
-  // q0=1, q1=0
-  std::vector<ptsbe::TraceInstruction> trace = {
-      {ptsbe::TraceInstructionType::Gate, "x", {0}, {}, {}},
-      {ptsbe::TraceInstructionType::Gate, "id", {1}, {}, {}},
-  };
+  const ptsbe::TraceInstruction xGate = {
+      ptsbe::TraceInstructionType::Gate, "x", {0}, {}, {}};
+  const ptsbe::TraceInstruction idGate = {
+      ptsbe::TraceInstructionType::Gate, "id", {1}, {}, {}};
+  const ptsbe::TraceInstruction measure0 = {
+      ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}};
+  const ptsbe::TraceInstruction measure1 = {
+      ptsbe::TraceInstructionType::Measurement, "mz", {1}, {}, {}};
 
   // First test: measure in order {0, 1}
   {
     ptsbe::PTSBatch batch;
-    batch.trace = trace;
-    batch.measureQubits = {0, 1};
+    batch.trace = {xGate, idGate, measure0, measure1};
 
     KrausTrajectory traj(0, {}, 1.0, 10);
     batch.trajectories.push_back(traj);
@@ -304,8 +314,7 @@ CUDAQ_TEST(ExecutePTSBETest, MeasurementOrderAffectsBitstring) {
   // Second test: measure in order {1, 0}
   {
     ptsbe::PTSBatch batch;
-    batch.trace = trace;
-    batch.measureQubits = {1, 0};
+    batch.trace = {xGate, idGate, measure1, measure0};
 
     KrausTrajectory traj(0, {}, 1.0, 10);
     batch.trajectories.push_back(traj);
@@ -329,8 +338,8 @@ CUDAQ_TEST(ExecutePTSBETest, MultipleTrajectoryStateReset) {
        {},
        {},
        depolarization_channel(0.1)},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
   };
-  batch.measureQubits = {0};
 
   // Trajectory 1: X error (index 1) flips to |1>
   std::vector<KrausSelection> selectionsWithX = {
@@ -370,7 +379,6 @@ CUDAQ_TEST(ExecutePTSBETest, ReadoutNoiseBitFlipFlipsOutcome) {
        bit_flip_channel(1.0)},
   };
   batch.trace[2].channel->generateUnitaryParameters();
-  batch.measureQubits = {0};
 
   // X operator (index 1) at trace position 2 (the readout noise entry)
   std::vector<KrausSelection> selections = {
@@ -390,7 +398,6 @@ CUDAQ_TEST(ExecutePTSBETest, ReadoutNoiseBitFlipFlipsOutcome) {
 CUDAQ_TEST(ExecutePTSBETest, LifecycleDispatchProducesCorrectResults) {
   ptsbe::PTSBatch batch;
   batch.trace = kXTrace;
-  batch.measureQubits = {0};
 
   KrausTrajectory traj(0, {}, 1.0, 10);
   batch.trajectories.push_back(traj);
@@ -418,4 +425,27 @@ CUDAQ_TEST(ExecutePTSBETest, ReleaseBatchQubitsUnderOuterContext) {
   EXPECT_EQ(ids[0], 0);
   EXPECT_EQ(ids[1], 1);
   sim->deallocateQubits(ids);
+}
+
+/// Terminal-only execution derives its measure-qubit list from the trace's
+/// measurement sites, with no precomputed field: only the measured qubit of a
+/// larger register appears, in site order.
+CUDAQ_TEST(ExecutePTSBETest, TerminalOnlyDerivesQubitsFromTrace) {
+  ptsbe::PTSBatch batch;
+  batch.trace = {
+      {ptsbe::TraceInstructionType::Gate, "x", {0}, {}, {}},
+      {ptsbe::TraceInstructionType::Gate, "x", {2}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {2}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}},
+  };
+
+  KrausTrajectory traj(0, {}, 1.0, 10);
+  batch.trajectories.push_back(traj);
+
+  auto results = ptsbe::detail::samplePTSBEWithLifecycle(batch);
+  auto result = ptsbe::detail::aggregateResults(results);
+
+  // Sites measure q2 then q0, both prepared to |1>: bitstring "11" over the
+  // two measured qubits, with q1 absent from the record.
+  EXPECT_EQ(result.count("11"), 10u);
 }

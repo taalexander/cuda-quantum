@@ -31,11 +31,6 @@ struct PTSBatch {
   /// @brief Sampled noise trajectories
   std::vector<cudaq::KrausTrajectory> trajectories;
 
-  /// @brief Qubits to measure (terminal measurements). Used only when
-  /// hasMidCircuitMeasurement is false; mid-circuit replay reads every
-  /// measurement site from the trace instead.
-  std::vector<std::size_t> measureQubits;
-
   /// @brief Populate per-shot sequential bitstring data on the result. When
   /// false (default), only aggregated counts are produced; mid-circuit
   /// batches then aggregate their per-shot records into counts over unique
@@ -106,8 +101,8 @@ aggregateResults(const std::vector<cudaq::sample_result> &results);
 /// Caller must have set up ExecutionContext and allocated qubits
 /// on the simulator before calling this function.
 ///
-/// @param batch PTSBatch with trace, trajectories, measureQubits, and
-///        includeSequentialData flag
+/// @param batch PTSBatch with trace, trajectories, and includeSequentialData
+///        flag
 /// @return Per-trajectory sample results
 /// @throws std::runtime_error if simulator cast fails or contract violated
 std::vector<cudaq::sample_result> samplePTSBE(const PTSBatch &batch);

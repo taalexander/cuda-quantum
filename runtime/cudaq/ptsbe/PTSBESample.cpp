@@ -19,7 +19,6 @@
 #include <numeric>
 #include <span>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace cudaq::ptsbe::detail {
 
@@ -61,21 +60,6 @@ void validatePTSBEPreconditions(quantum_platform &platform,
 
   // noise_model is optional: noise can come from the model (gate-based) and/or
   // from cudaq.apply_noise() in the kernel.
-}
-
-std::vector<std::size_t>
-extractMeasureQubits(std::span<const TraceInstruction> trace) {
-  std::vector<std::size_t> qubits;
-  std::unordered_set<std::size_t> seen;
-  for (const auto &inst : trace) {
-    if (inst.type != TraceInstructionType::Measurement &&
-        inst.type != TraceInstructionType::MeasureReset)
-      continue;
-    for (auto id : inst.targets)
-      if (seen.insert(id).second)
-        qubits.push_back(id);
-  }
-  return qubits;
 }
 
 std::vector<RecordSite>
@@ -446,10 +430,6 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 
   batch.trace = std::move(trace);
   batch.hasMidCircuitMeasurement = hasMidCircuitMeasurement(batch.trace);
-  // Mid-circuit replay reads every measuring site from the trace, so the
-  // terminal measure-qubit list is only needed for terminal-only batches.
-  if (!batch.hasMidCircuitMeasurement)
-    batch.measureQubits = extractMeasureQubits(batch.trace);
   auto envMaxShotsPerPath = maxShotsPerPathEnvOverride();
   if (envMaxShotsPerPath)
     cudaq::info("[ptsbe] max shots per path set to {} via "

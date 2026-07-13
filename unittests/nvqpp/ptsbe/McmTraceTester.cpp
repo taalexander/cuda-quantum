@@ -288,7 +288,7 @@ CUDAQ_TEST(McmTraceTest, TerminalMeasureResetIsNotMidCircuit) {
   EXPECT_EQ(trace[1].type, TraceInstructionType::MeasureReset);
   EXPECT_FALSE(hasMidCircuitMeasurement(trace));
 
-  auto measureQubits = detail::extractMeasureQubits(trace);
+  auto measureQubits = detail::terminalMeasureQubits(trace);
   EXPECT_EQ(measureQubits, (std::vector<std::size_t>{0}));
 }
 

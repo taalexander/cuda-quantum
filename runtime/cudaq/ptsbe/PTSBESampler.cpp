@@ -230,7 +230,13 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
   if (totalShots == 0)
     return {};
 
-  if (!batch.hasMidCircuitMeasurement && batch.measureQubits.empty())
+  // Terminal-only batches sample this qubit list after the gate walk; it is
+  // read from the trace's measurement sites rather than a precomputed field.
+  // Mid-circuit batches record every measuring site during per-shot replay.
+  const std::vector<std::size_t> terminalQubits =
+      batch.hasMidCircuitMeasurement ? std::vector<std::size_t>{}
+                                     : terminalMeasureQubits(batch.trace);
+  if (!batch.hasMidCircuitMeasurement && terminalQubits.empty())
     return {};
 
   // Replay-time Kraus branching needs per-branch state probabilities, which
@@ -281,9 +287,9 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
           simulator.applyGate(*op.task);
       simulator.flushGateQueue();
 
-      auto execResult = simulator.sample(batch.measureQubits,
-                                         static_cast<int>(traj.num_shots),
-                                         batch.includeSequentialData);
+      auto execResult =
+          simulator.sample(terminalQubits, static_cast<int>(traj.num_shots),
+                           batch.includeSequentialData);
 
       cudaq::ExecutionResult er{execResult.counts};
       if (batch.includeSequentialData)

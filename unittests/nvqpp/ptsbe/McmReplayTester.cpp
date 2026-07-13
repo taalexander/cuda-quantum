@@ -224,7 +224,6 @@ CUDAQ_TEST(McmReplayTest, RecordsDecorrelatedAcrossShotsOfOneTrajectory) {
       {TraceInstructionType::Gate, "x", {0}, {}, {}},
       {TraceInstructionType::Measurement, "mz", {0}, {}, {}, std::nullopt, 1},
   };
-  batch.measureQubits = {0};
   batch.includeSequentialData = true;
   batch.hasMidCircuitMeasurement = true;
   batch.maxShotsPerPath = 1;
@@ -507,7 +506,6 @@ CUDAQ_TEST(McmReplayTest, McmBatchCountsOnlyExecutesAndAggregates) {
       {TraceInstructionType::Measurement, "mz", {0}, {}, {}, std::nullopt, 0},
       {TraceInstructionType::Measurement, "mz", {1}, {}, {}, std::nullopt, 1},
   };
-  batch.measureQubits = {0, 1};
   batch.includeSequentialData = false;
   batch.hasMidCircuitMeasurement = true;
   batch.maxShotsPerPath = 1;

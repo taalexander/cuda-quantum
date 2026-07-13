@@ -14,7 +14,8 @@
 using namespace cudaq;
 
 const ptsbe::PTSBETrace kXTrace = {
-    {ptsbe::TraceInstructionType::Gate, "x", {0}, {}, {}}};
+    {ptsbe::TraceInstructionType::Gate, "x", {0}, {}, {}},
+    {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}}};
 
 CUDAQ_TEST(PTSBEPolicyTest, RegistryDispatch) {
   auto kind = [](auto policy) -> std::string {
@@ -38,7 +39,6 @@ CUDAQ_TEST(PTSBEPolicyTest, PolicyName) {
 CUDAQ_TEST(PTSBEPolicyTest, ExecuteBatchAggregatesResults) {
   ptsbe::PTSBatch batch;
   batch.trace = kXTrace;
-  batch.measureQubits = {0};
   batch.trajectories.emplace_back(0, std::vector<cudaq::KrausSelection>{}, 0.7,
                                   7);
   batch.trajectories.emplace_back(1, std::vector<cudaq::KrausSelection>{}, 0.3,
@@ -68,7 +68,6 @@ CUDAQ_TEST(PTSBEPolicyTest, ContextRestoredAfterFailure) {
   ptsbe::PTSBatch badBatch;
   badBatch.trace = {
       {ptsbe::TraceInstructionType::Gate, "not_a_gate", {0}, {}, {}}};
-  badBatch.measureQubits = {0};
   badBatch.trajectories.emplace_back(0, std::vector<cudaq::KrausSelection>{},
                                      1.0, 5);
 
@@ -81,7 +80,6 @@ CUDAQ_TEST(PTSBEPolicyTest, ContextRestoredAfterFailure) {
 
   ptsbe::PTSBatch goodBatch;
   goodBatch.trace = kXTrace;
-  goodBatch.measureQubits = {0};
   goodBatch.trajectories.emplace_back(0, std::vector<cudaq::KrausSelection>{},
                                       1.0, 5);
 

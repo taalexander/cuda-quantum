@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace cudaq::ptsbe {
@@ -140,3 +141,32 @@ struct PTSBEExecutionData {
 };
 
 } // namespace cudaq::ptsbe
+
+namespace cudaq::ptsbe::detail {
+
+/// @brief Ordered, de-duplicated target qubits of every Measurement and
+/// MeasureReset site in a trace, in first-appearance order.
+///
+/// For a terminal-only trace (no mid-circuit measurement) every measuring
+/// site is terminal, so this is exactly the qubit list the terminal-sampling
+/// fast path draws bitstrings over. Executors derive it from the trace at
+/// execution time instead of a precomputed batch field. MeasureReset sites are
+/// included so a terminal measure-then-reset still records its bit: replay
+/// never applies the trailing reset, and sampling the un-reset state yields
+/// the measurement outcome.
+inline std::vector<std::size_t>
+terminalMeasureQubits(std::span<const TraceInstruction> trace) {
+  std::vector<std::size_t> qubits;
+  std::unordered_set<std::size_t> seen;
+  for (const auto &inst : trace) {
+    if (inst.type != TraceInstructionType::Measurement &&
+        inst.type != TraceInstructionType::MeasureReset)
+      continue;
+    for (auto id : inst.targets)
+      if (seen.insert(id).second)
+        qubits.push_back(id);
+  }
+  return qubits;
+}
+
+} // namespace cudaq::ptsbe::detail
