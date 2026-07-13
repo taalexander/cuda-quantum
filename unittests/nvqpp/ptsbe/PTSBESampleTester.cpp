@@ -160,15 +160,16 @@ CUDAQ_TEST(PTSBESampleTest, WarnNamedRegisters) {
 
 CUDAQ_TEST(PTSBESampleTest, PTSBatchHasCorrectMeasureQubits) {
   auto batch = detail::tracePTSBatch(bellKernel);
-  EXPECT_EQ(batch.measureQubits.size(), 2);
-  EXPECT_EQ(batch.measureQubits[0], 0);
-  EXPECT_EQ(batch.measureQubits[1], 1);
+  auto measureQubits = detail::terminalMeasureQubits(batch.trace);
+  EXPECT_EQ(measureQubits.size(), 2);
+  EXPECT_EQ(measureQubits[0], 0);
+  EXPECT_EQ(measureQubits[1], 1);
 }
 
 CUDAQ_TEST(PTSBESampleTest, PTSBatchFromGHZHas3Qubits) {
   auto batch = detail::tracePTSBatch(ghzKernel);
   EXPECT_EQ(numQubits(batch.trace), 3);
-  EXPECT_EQ(batch.measureQubits.size(), 3);
+  EXPECT_EQ(detail::terminalMeasureQubits(batch.trace).size(), 3);
 }
 
 CUDAQ_TEST(PTSBESampleTest, PTSBatchTrajectoriesEmptyForPOC) {
@@ -177,13 +178,14 @@ CUDAQ_TEST(PTSBESampleTest, PTSBatchTrajectoriesEmptyForPOC) {
 }
 
 // Kernel allocates 4 qubits but only measures q[0] and q[2].
-// extractMeasureQubits derives the list from Measurement entries,
+// terminalMeasureQubits derives the list from Measurement entries,
 // so only the actually-measured qubits appear, in kernel order.
 CUDAQ_TEST(PTSBESampleTest, PTSBatchSeparatedMeasureQubits) {
   auto batch = detail::tracePTSBatch(separatedMeasureKernel);
-  EXPECT_EQ(batch.measureQubits.size(), 2);
-  EXPECT_EQ(batch.measureQubits[0], 0);
-  EXPECT_EQ(batch.measureQubits[1], 2);
+  auto measureQubits = detail::terminalMeasureQubits(batch.trace);
+  EXPECT_EQ(measureQubits.size(), 2);
+  EXPECT_EQ(measureQubits[0], 0);
+  EXPECT_EQ(measureQubits[1], 2);
 }
 
 CUDAQ_TEST(PTSBESampleTest, PTSBatchQubitInfoPreserved) {
@@ -247,7 +249,7 @@ CUDAQ_TEST(PTSBESampleTest, ExecuteWithEmptyTrajectoriesReturnsEmpty) {
 CUDAQ_TEST(PTSBESampleTest, FullInterceptFlowCapturesTrace) {
   auto batch = detail::tracePTSBatch(bellKernel);
   EXPECT_FALSE(batch.trace.empty());
-  EXPECT_FALSE(batch.measureQubits.empty());
+  EXPECT_FALSE(detail::terminalMeasureQubits(batch.trace).empty());
 
   // With no trajectories, should return empty (not throw)
   auto results = detail::samplePTSBEWithLifecycle(batch);
@@ -296,7 +298,7 @@ CUDAQ_TEST(PTSBESampleTest, TracePTSBatchCapturesGHZCircuit) {
   // GHZ has 3 gates (h, cx, cx)
   EXPECT_EQ(countInstructions(batch.trace, TraceInstructionType::Gate), 3);
   // 3 qubits
-  EXPECT_EQ(batch.measureQubits.size(), 3);
+  EXPECT_EQ(detail::terminalMeasureQubits(batch.trace).size(), 3);
 }
 
 // Test that tracePTSBatch correctly handles parameterized kernels
@@ -305,7 +307,7 @@ CUDAQ_TEST(PTSBESampleTest, TracePTSBatchHandlesParameterizedKernel) {
   // rotationKernel has 2 gates (rx, ry)
   EXPECT_EQ(countInstructions(batch.trace, TraceInstructionType::Gate), 2);
   // 2 qubits
-  EXPECT_EQ(batch.measureQubits.size(), 2);
+  EXPECT_EQ(detail::terminalMeasureQubits(batch.trace).size(), 2);
 }
 
 // End-to-end test for PTSBE pipeline.
@@ -332,9 +334,8 @@ CUDAQ_TEST(PTSBESampleTest, E2E_GenerateTrajectoriesAllocateShotsRunSample) {
   // Build PTSBE trace with noise model and extract noise sites
   PTSBatch batch;
   batch.trace = detail::buildPTSBETrace(traceCtx.kernelTrace, noise);
-  batch.measureQubits = detail::extractMeasureQubits(batch.trace);
   EXPECT_FALSE(batch.trace.empty());
-  EXPECT_FALSE(batch.measureQubits.empty());
+  EXPECT_FALSE(detail::terminalMeasureQubits(batch.trace).empty());
 
   auto extraction = detail::extractNoiseSites(batch.trace);
   ASSERT_GT(extraction.noise_sites.size(), 0)

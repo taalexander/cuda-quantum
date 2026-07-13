@@ -96,23 +96,6 @@ void validatePTSBEPreconditions(
 [[nodiscard]] PTSBETrace buildPTSBETrace(const cudaq::Trace &trace,
                                          const cudaq::noise_model &noise_model);
 
-/// @brief Extract measured qubit IDs from the trace's measurement entries.
-///
-/// Scans the trace for Measurement and MeasureReset instructions and collects
-/// their target qubit IDs in the order they first appear. Duplicates are
-/// suppressed so each qubit appears at most once while preserving the
-/// kernel's measurement ordering. MeasureReset sites are included so that a
-/// TERMINAL measure-then-reset still records its bit: replay never applies
-/// the trailing reset, and sampling the un-reset state yields exactly the
-/// measurement outcome. Mid-circuit MeasureReset sites never reach terminal
-/// sampling: dispatch routes mid-circuit traces to per-shot replay, which
-/// collapses and records every measuring site directly.
-///
-/// @param trace PTSBE trace
-/// @return Ordered, de-duplicated vector of measured qubit indices
-std::vector<std::size_t>
-extractMeasureQubits(std::span<const TraceInstruction> trace);
-
 /// @brief Build the per-shot record layout from a PTSBE trace.
 ///
 /// Walks Measurement and MeasureReset instructions in trace order and emits
@@ -294,7 +277,7 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
 /// @tparam Args Kernel argument types
 /// @param kernel Quantum kernel to trace
 /// @param args Kernel arguments
-/// @return PTSBatch with trace, empty trajectories, and measureQubits
+/// @return PTSBatch with trace and empty trajectories
 /// @throws std::runtime_error if conditional feedback detected
 template <typename QuantumKernel, typename... Args>
 PTSBatch tracePTSBatch(QuantumKernel &&kernel, Args &&...args) {
@@ -310,7 +293,6 @@ PTSBatch tracePTSBatch(QuantumKernel &&kernel, Args &&...args) {
   static const cudaq::noise_model kEmptyNoiseModel;
   PTSBatch batch;
   batch.trace = buildPTSBETrace(traceCtx.kernelTrace, kEmptyNoiseModel);
-  batch.measureQubits = extractMeasureQubits(batch.trace);
   return batch;
 }
 
