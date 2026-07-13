@@ -248,17 +248,15 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
   }
 
   // Stage 3: Build PTSBatch with trajectory generation and shot allocation.
-  // buildPTSBatchFromTrace sets includeSequentialData from the options,
-  // forcing it on when the trace has mid-circuit measurement.
   auto batch = buildPTSBatchFromTrace(std::move(ptsbeTrace), options, shots);
   cudaq::info("[ptsbe] Allocated {} shots across {} trajectories",
               batch.totalShots(), batch.trajectories.size());
 
-  // Named registers survive as record-site names whenever per-shot records
-  // are produced (sequential data requested, or forced on by mid-circuit
-  // measurement, which batch.includeSequentialData captures). Warn only when
-  // records are unavailable.
-  if (!batch.includeSequentialData)
+  // Named registers survive as record-site names whenever records are
+  // produced: as counts over unique full records for mid-circuit batches,
+  // or as the per-shot list when sequential data was requested. Warn only
+  // when records are unavailable.
+  if (!batch.includeSequentialData && !batch.hasMidCircuitMeasurement)
     warnNamedRegisters(kernelName, traceCtx);
 
   // Stage 4: Execute PTSBE with life-cycle management

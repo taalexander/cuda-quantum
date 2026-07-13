@@ -84,6 +84,20 @@ def test_record_layout_exposed_with_site_fields(named_mcm_kernel):
     assert layout[2].register_name is None
 
 
+def test_mcm_counts_only_by_default(named_mcm_kernel):
+    # Mid-circuit results default to counts over unique full records; the
+    # per-shot list is opt-in via include_sequential_data.
+    shots = 60
+    result = cudaq.ptsbe.sample(named_mcm_kernel, shots_count=shots)
+
+    assert result.get_sequential_data() == []
+    layout = result.record_layout
+    assert len(layout) == 3
+    counts = {bits: result.count(bits) for bits in result}
+    assert sum(counts.values()) == shots
+    assert all(len(bits) == len(layout) for bits in counts)
+
+
 def test_sequential_data_numpy_shape(named_mcm_kernel):
     shots = 40
     result = cudaq.ptsbe.sample(named_mcm_kernel,

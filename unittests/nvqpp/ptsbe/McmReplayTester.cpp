@@ -73,45 +73,6 @@ std::vector<std::string> recordsFrom(const cudaq::sample_result &result,
 // PER-SHOT REPLAY CORRECTNESS (generic path, qpp simulator)
 // ============================================================================
 
-// Bell collapse regression for h(q0); cx(q0,q1); mz(q0); mz(q1). The batch
-// is built by hand with hasMidCircuitMeasurement set so the executor takes
-// the site-ordered per-shot replay path instead of terminal sampling: the
-// executor contract is that the flag alone selects replay. Measuring q0
-// must collapse the entangled pair so the subsequent mz(q1) is drawn from
-// the collapsed state. Independent marginal draws (the silent
-// mis-simulation this test closes) would produce 01/10 records.
-CUDAQ_TEST(McmReplayTest, BellCollapseRecordsAlwaysCorrelated) {
-  cudaq::set_random_seed(42);
-
-  PTSBatch batch;
-  batch.trace = {
-      {TraceInstructionType::Gate, "h", {0}, {}, {}},
-      {TraceInstructionType::Gate, "x", {1}, {0}, {}},
-      {TraceInstructionType::Measurement, "mz", {0}, {}, {}, std::nullopt, 0},
-      {TraceInstructionType::Measurement, "mz", {1}, {}, {}, std::nullopt, 1},
-  };
-  batch.measureQubits = {0, 1};
-  batch.includeSequentialData = true;
-  batch.hasMidCircuitMeasurement = true;
-  batch.maxShotsPerPath = 1;
-
-  const std::size_t shots = 100;
-  batch.trajectories.push_back(cudaq::KrausTrajectory(0, {}, 1.0, shots));
-
-  auto results = detail::samplePTSBEWithLifecycle(batch);
-  auto result = detail::aggregateResults(results);
-
-  auto records = recordsFrom(result, shots, 2);
-  for (const auto &record : records)
-    EXPECT_EQ(record[0], record[1]) << "decorrelated Bell record: " << record;
-
-  EXPECT_EQ(result.count("01"), 0u);
-  EXPECT_EQ(result.count("10"), 0u);
-  EXPECT_GT(result.count("00"), 0u);
-  EXPECT_GT(result.count("11"), 0u);
-  EXPECT_EQ(result.count("00") + result.count("11"), shots);
-}
-
 // End-to-end Bell collapse through cudaq::ptsbe::sample: mz(q0) is genuinely
 // mid-circuit (cx touches q0 afterwards), so the trace build must flag the
 // batch and the replay path must collapse before the cx copies the outcome.
@@ -454,34 +415,6 @@ CUDAQ_TEST(McmReplayTest, MergeSitesIncludeIdentityKeepsSlotAlignment) {
   EXPECT_EQ(compactOps[3].kind, ReplayOpKind::Measure);
 }
 
-// Legacy mergeTasksWithTrajectory (now reimplemented on top of
-// mergeSitesWithTrajectory) must return the same gate list as before:
-// circuit gates plus selected noise operators, measure/reset sites skipped.
-CUDAQ_TEST(McmReplayTest, LegacyMergeTasksReturnsSameGateList) {
-  auto trace = makeSiteTrace();
-
-  std::vector<cudaq::KrausSelection> selections = {
-      cudaq::KrausSelection(1, {0}, "h", 3, true)};
-  cudaq::KrausTrajectory trajectory(0, selections, 0.1, 10);
-
-  auto tasks = mergeTasksWithTrajectory<double>(trace, trajectory);
-
-  ASSERT_EQ(tasks.size(), 3u);
-  EXPECT_EQ(tasks[0].operationName, "h");
-  EXPECT_EQ(tasks[1].operationName, "z");
-  EXPECT_EQ(tasks[1].targets, (std::vector<std::size_t>{0}));
-  EXPECT_EQ(tasks[2].operationName, "x");
-
-  // The Gate subsequence of the replay-op list is the same gate list.
-  auto gateCache = detail::convertTraceGates<double>(trace);
-  auto replay = mergeSitesWithTrajectory<double>(trace, gateCache, trajectory);
-  std::vector<std::string> gateNames;
-  for (const auto &op : replay.ops)
-    if (op.kind == ReplayOpKind::Gate)
-      gateNames.push_back(op.task->operationName);
-  EXPECT_EQ(gateNames, (std::vector<std::string>{"h", "z", "x"}));
-}
-
 // ============================================================================
 // MAX-SHOTS-PER-SLOT ENVIRONMENT OVERRIDE
 // ============================================================================
@@ -537,4 +470,81 @@ CUDAQ_TEST(McmReplayTest, EnvVarMaxShotsPerPathRejectsNonNumeric) {
 
   ScopedEnvVar env("CUDAQ_PTSBE_MAX_SHOTS_PER_PATH", "many");
   EXPECT_ANY_THROW(detail::buildPTSBatchFromTrace(makeMcmTrace(), options, 16));
+}
+
+// ============================================================================
+// RECORDS OPT-IN CONTRACT
+// ============================================================================
+//
+// Mid-circuit results default to counts over unique full records: a lossless
+// sufficient statistic for decoding, since shots are exchangeable and
+// duplicate records decode identically. The per-shot list is opt-in via
+// include_sequential_data. These tests replace the earlier contract where
+// mid-circuit measurement forced the sequential-data channel on.
+
+// buildPTSBatchFromTrace must not force sequential data on for mid-circuit
+// traces; the option alone controls it.
+CUDAQ_TEST(McmReplayTest, BuildBatchMcmDefaultsToCountsOnly) {
+  PTSBEOptions options;
+  auto batch = detail::buildPTSBatchFromTrace(makeMcmTrace(), options, 16);
+  EXPECT_TRUE(batch.hasMidCircuitMeasurement);
+  EXPECT_FALSE(batch.includeSequentialData);
+
+  options.include_sequential_data = true;
+  auto optInBatch = detail::buildPTSBatchFromTrace(makeMcmTrace(), options, 16);
+  EXPECT_TRUE(optInBatch.includeSequentialData);
+}
+
+// A hand-built mid-circuit batch without sequential data executes and
+// aggregates full records into counts.
+CUDAQ_TEST(McmReplayTest, McmBatchCountsOnlyExecutesAndAggregates) {
+  cudaq::set_random_seed(42);
+
+  PTSBatch batch;
+  batch.trace = {
+      {TraceInstructionType::Gate, "h", {0}, {}, {}},
+      {TraceInstructionType::Gate, "x", {1}, {0}, {}},
+      {TraceInstructionType::Measurement, "mz", {0}, {}, {}, std::nullopt, 0},
+      {TraceInstructionType::Measurement, "mz", {1}, {}, {}, std::nullopt, 1},
+  };
+  batch.measureQubits = {0, 1};
+  batch.includeSequentialData = false;
+  batch.hasMidCircuitMeasurement = true;
+  batch.maxShotsPerPath = 1;
+
+  const std::size_t shots = 100;
+  batch.trajectories.push_back(cudaq::KrausTrajectory(0, {}, 1.0, shots));
+
+  auto results = detail::samplePTSBEWithLifecycle(batch);
+  auto result = detail::aggregateResults(results);
+
+  EXPECT_TRUE(result.sequential_data().empty());
+  EXPECT_EQ(result.count("01"), 0u);
+  EXPECT_EQ(result.count("10"), 0u);
+  EXPECT_GT(result.count("00"), 0u);
+  EXPECT_GT(result.count("11"), 0u);
+  EXPECT_EQ(result.count("00") + result.count("11"), shots);
+}
+
+// End-to-end default through cudaq::ptsbe::sample: counts over full
+// records, empty sequential data; opting in returns the per-shot list.
+CUDAQ_TEST(McmReplayTest, McmSampleDefaultsToCountsOnlyOptInReturnsShotList) {
+  cudaq::set_random_seed(42);
+  cudaq::noise_model noise;
+  noise.add_all_qubit_channel("h", cudaq::depolarization_channel(0.05));
+
+  sample_options options;
+  options.shots = 100;
+  options.noise = noise;
+
+  auto result = sample(options, midCircuitBellKernel);
+  EXPECT_EQ(result.get_total_shots(), options.shots);
+  EXPECT_TRUE(result.sequential_data().empty());
+  EXPECT_EQ(result.count("00") + result.count("11"), options.shots);
+  EXPECT_EQ(result.count("01"), 0u);
+  EXPECT_EQ(result.count("10"), 0u);
+
+  options.ptsbe.include_sequential_data = true;
+  auto optInResult = sample(options, midCircuitBellKernel);
+  EXPECT_EQ(optInResult.sequential_data().size(), options.shots);
 }

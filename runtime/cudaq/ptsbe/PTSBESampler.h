@@ -33,10 +33,9 @@ struct PTSBatch {
   std::vector<std::size_t> measureQubits;
 
   /// @brief Populate per-shot sequential bitstring data on the result. When
-  /// false (default), only aggregated counts are produced. Invariant: always
-  /// true when hasMidCircuitMeasurement is set, since mid-circuit replay
-  /// carries its per-shot records on the sequential-data channel
-  /// (buildPTSBatchFromTrace forces it on; samplePTSBE rejects violations).
+  /// false (default), only aggregated counts are produced; mid-circuit
+  /// batches then aggregate their per-shot records into counts over unique
+  /// full records without materializing the per-shot list.
   bool includeSequentialData = false;
 
   /// @brief True when the trace contains mid-circuit measurement or reset:
@@ -46,9 +45,10 @@ struct PTSBatch {
   /// measurements only.
   bool hasMidCircuitMeasurement = false;
 
-  /// @brief Maximum shots executed per batch slot (0 = unlimited). Slots
-  /// covering more shots than this cap are split so per-shot measurement
-  /// records within one trajectory stay decorrelated. Defaults to 1 when
+  /// @brief Maximum shots sharing one replay of a trajectory, one replay
+  /// path (0 = unlimited). Paths covering more shots than this cap are split
+  /// so per-shot measurement records within one trajectory stay
+  /// decorrelated. Defaults to 1 when
   /// hasMidCircuitMeasurement is set, unlimited otherwise (see
   /// PTSBEOptions::max_shots_per_path).
   std::size_t maxShotsPerPath = 0;

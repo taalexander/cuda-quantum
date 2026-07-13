@@ -115,10 +115,14 @@ def sample(kernel,
           specifications, and per-trajectory measurement outcomes in the
           returned result. Defaults to ``False``.
       include_sequential_data (bool): Populate per-shot sequential bitstring
-          data on the result. Defaults to ``False``. Forced on when the
-          kernel contains mid-circuit measurement or reset.
-      max_shots_per_path (int or ``None``): Maximum shots executed per batch
-          slot. ``None`` (default) selects automatically: 1 when the kernel
+          data on the result. Defaults to ``False``. For kernels with
+          mid-circuit measurement or reset the default result is counts
+          over unique full records (a lossless sufficient statistic for
+          the per-shot table); set this to ``True`` for one record string
+          per shot via ``result.get_sequential_data()``.
+      max_shots_per_path (int or ``None``): Maximum shots sharing one replay
+          of a trajectory (one replay path). ``None`` (default) selects
+          automatically: 1 when the kernel
           contains mid-circuit measurement or reset or when any frontier
           knob (``num_root_draws``, ``max_paths_per_root``,
           ``max_live_states``) is set, unlimited otherwise. 0 forces
@@ -221,10 +225,11 @@ def sample_async(kernel,
           allocating shots across trajectories.
       return_execution_data (bool): Include execution data in the result.
       include_sequential_data (bool): Populate per-shot sequential data.
-          Forced on when the kernel contains mid-circuit measurement or
-          reset; see ``sample`` for the record semantics and
-          ``record_layout``.
-      max_shots_per_path (int or ``None``): Maximum shots per batch slot.
+          Defaults to ``False``: mid-circuit kernels then return counts
+          over unique full records; see ``sample`` for the record
+          semantics and ``record_layout``.
+      max_shots_per_path (int or ``None``): Maximum shots sharing one replay
+          of a trajectory (one replay path).
           ``None`` selects automatically; 0 forces unlimited. The environment
           variable ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.
       num_root_draws (int or ``None``): Fixed number of independent root

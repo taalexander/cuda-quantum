@@ -452,7 +452,7 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
     batch.measureQubits = extractMeasureQubits(batch.trace);
   auto envMaxShotsPerPath = maxShotsPerPathEnvOverride();
   if (envMaxShotsPerPath)
-    cudaq::info("[ptsbe] max shots per slot set to {} via "
+    cudaq::info("[ptsbe] max shots per path set to {} via "
                 "CUDAQ_PTSBE_MAX_SHOTS_PER_PATH",
                 *envMaxShotsPerPath);
   // The frontier default is one terminal sample per path (T=1, so
@@ -462,10 +462,10 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
           ? *envMaxShotsPerPath
           : options.max_shots_per_path.value_or(
                 (batch.hasMidCircuitMeasurement || frontier) ? 1 : 0);
-  // Mid-circuit replay produces per-shot records; sequential data is the
-  // channel that carries them, so it is always on for such batches.
-  batch.includeSequentialData =
-      options.include_sequential_data || batch.hasMidCircuitMeasurement;
+  // Mid-circuit replay aggregates per-shot records into counts over unique
+  // full records by default; the per-shot list on the sequential-data
+  // channel is opt-in.
+  batch.includeSequentialData = options.include_sequential_data;
   auto noiseResult = extractNoiseSites(batch.trace, /*validate=*/true,
                                        options.allow_non_unitary);
   cudaq::info("[ptsbe] Extracted {} noise sites from {} total instructions",

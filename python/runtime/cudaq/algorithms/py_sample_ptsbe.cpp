@@ -505,7 +505,10 @@ Args:
   shot_allocation: Shot allocation strategy or None for default (proportional).
   return_execution_data: Whether to include execution data in the result.
   include_sequential_data: Whether to populate per-shot sequential data.
-  max_shots_per_path: Maximum shots per batch slot. None selects
+    When False (default), mid-circuit kernels return counts over unique
+    full records instead of a per-shot list.
+  max_shots_per_path: Maximum shots sharing one replay of a trajectory
+    (one replay path). None selects
     automatically (1 with mid-circuit measurement or reset or when any
     frontier knob is set, unlimited otherwise); 0 forces unlimited. The
     environment variable CUDAQ_PTSBE_MAX_SHOTS_PER_PATH takes precedence.

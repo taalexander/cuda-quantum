@@ -34,16 +34,19 @@ struct PTSBEOptions {
   bool return_execution_data = false;
 
   /// Populate per-shot sequential bitstring data on the result. When false
-  /// (default), only aggregated counts are produced.
+  /// (default), only aggregated counts are produced; for kernels with
+  /// mid-circuit measurement or reset those counts are over unique full
+  /// records, a lossless sufficient statistic for the per-shot table.
   bool include_sequential_data = false;
 
   /// Maximum number of unique trajectories to generate. When `nullopt`,
   /// defaults to the number of shots.
   std::optional<std::size_t> max_trajectories = std::nullopt;
 
-  /// Maximum shots executed per batch slot. Capping the slot size splits a
-  /// trajectory's shots across slots so their measurement records stay
-  /// decorrelated. When `nullopt` (default), selected automatically: 1 when
+  /// Maximum shots sharing one replay of a trajectory (one replay path).
+  /// Capping the path size splits a trajectory's shots across independent
+  /// replay paths so their measurement records stay decorrelated. When
+  /// `nullopt` (default), selected automatically: 1 when
   /// the trace contains mid-circuit measurement or reset or when any
   /// frontier knob (num_root_draws, max_paths_per_root, max_live_states) is
   /// set, unlimited otherwise. An explicit 0 forces unlimited. The

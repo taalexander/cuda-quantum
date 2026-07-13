@@ -345,7 +345,7 @@ add_executable(test_ptsbe ${CUDAQ_GTEST_MAIN}
   ptsbe/ShotAllocationTester.cpp
   ptsbe/PTSBEInterfaceTester.cpp
   ptsbe/TraceConversionTester.cpp
-  ptsbe/MergeTasksWithTrajectoryTester.cpp
+  ptsbe/MergeSitesWithTrajectoryTester.cpp
   ptsbe/McmTraceTester.cpp
   ptsbe/McmReplayTester.cpp
   ptsbe/ExecutePTSBETester.cpp
