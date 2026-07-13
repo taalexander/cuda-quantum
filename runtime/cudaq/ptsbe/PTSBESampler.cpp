@@ -98,29 +98,6 @@ mergeSitesWithTrajectory<double>(std::span<const TraceInstruction>,
                                  std::span<const GateTask<double>>,
                                  const cudaq::KrausTrajectory &, bool);
 
-template <typename ScalarType>
-std::vector<GateTask<ScalarType>>
-mergeTasksWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
-                         const cudaq::KrausTrajectory &trajectory,
-                         bool includeIdentity) {
-  auto gateCache = detail::convertTraceGates<ScalarType>(ptsbeTrace);
-  auto replay = mergeSitesWithTrajectory<ScalarType>(
-      ptsbeTrace, gateCache, trajectory, includeIdentity);
-  std::vector<GateTask<ScalarType>> merged;
-  merged.reserve(replay.ops.size());
-  for (const auto &op : replay.ops)
-    if (op.kind == ReplayOpKind::Gate)
-      merged.push_back(*op.task);
-  return merged;
-}
-
-template std::vector<GateTask<float>>
-mergeTasksWithTrajectory<float>(std::span<const TraceInstruction>,
-                                const cudaq::KrausTrajectory &, bool);
-template std::vector<GateTask<double>>
-mergeTasksWithTrajectory<double>(std::span<const TraceInstruction>,
-                                 const cudaq::KrausTrajectory &, bool);
-
 std::size_t PTSBatch::totalShots() const {
   std::size_t total = 0;
   for (const auto &traj : trajectories)
@@ -317,11 +294,12 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
       // terminal) collapses via mz and writes its bit into the record, so no
       // separate terminal sampling pass runs. Each shot replays
       // independently to keep records within one trajectory decorrelated.
-      // Mid-circuit batches always carry sequential data (PTSBatch
-      // invariant enforced by samplePTSBE).
+      // Records aggregate into counts; the per-shot list materializes only
+      // when sequential data was requested.
       cudaq::CountsDictionary counts;
       std::vector<std::string> sequentialData;
-      sequentialData.reserve(traj.num_shots);
+      if (batch.includeSequentialData)
+        sequentialData.reserve(traj.num_shots);
 
       for (std::size_t shot = 0; shot < traj.num_shots; ++shot) {
         simulator.setToZeroState();
@@ -357,7 +335,8 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
         simulator.flushGateQueue();
 
         ++counts[record];
-        sequentialData.push_back(std::move(record));
+        if (batch.includeSequentialData)
+          sequentialData.push_back(std::move(record));
       }
 
       cudaq::ExecutionResult er{std::move(counts)};
@@ -410,13 +389,6 @@ std::vector<cudaq::sample_result> dispatchPTSBE(SimulatorType &sim,
 } // namespace
 
 std::vector<cudaq::sample_result> samplePTSBE(const PTSBatch &batch) {
-  if (batch.hasMidCircuitMeasurement && !batch.includeSequentialData)
-    throw std::runtime_error(
-        "PTSBatch invariant violated: mid-circuit measurement batches carry "
-        "per-shot records on the sequential-data channel, so "
-        "includeSequentialData must be set (buildPTSBatchFromTrace enforces "
-        "this)");
-
   auto *baseSim = nvqir::getCircuitSimulatorInternal();
 
   if (baseSim->isSinglePrecision()) {

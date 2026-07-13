@@ -119,24 +119,6 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
                          const cudaq::KrausTrajectory &trajectory,
                          bool includeIdentity = false);
 
-/// @brief Legacy gate-only view of mergeSitesWithTrajectory: Gate entries
-/// become gate tasks and Noise entries are resolved via the trajectory
-/// selections, while Measurement, Reset, and MeasureReset entries are
-/// dropped. Only valid for terminal-measurement replay, where the simulator
-/// samples measurement qubits after applying all gates; traces with
-/// mid-circuit measurement or reset need mergeSitesWithTrajectory. Converts
-/// the trace's gates on every call and returns owned copies; per-batch
-/// callers should build a gate cache once and use mergeSitesWithTrajectory.
-///
-/// @param includeIdentity When true, identity Kraus operators are
-///   included as gate tasks. Useful if you require all trajectories to have
-///   identical gate structure.
-template <typename ScalarType>
-std::vector<GateTask<ScalarType>>
-mergeTasksWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
-                         const cudaq::KrausTrajectory &trajectory,
-                         bool includeIdentity = false);
-
 } // namespace cudaq::ptsbe
 
 namespace cudaq::ptsbe::detail {
@@ -174,9 +156,8 @@ GateTask<ScalarType> krausSelectionToTask(const cudaq::KrausSelection &sel,
 /// site-ordered op list from mergeSitesWithTrajectory: measurement sites
 /// collapse the state and write their bit into a fixed-width record string
 /// at the site's record offset, and reset sites return their qubits to |0>.
-/// Each shot's record becomes one count entry and one sequential-data entry
-/// (mid-circuit batches always carry sequential data, a PTSBatch invariant
-/// enforced by samplePTSBE).
+/// Each shot's record becomes one count entry; the per-shot sequential-data
+/// list materializes only when PTSBatch::includeSequentialData is set.
 ///
 /// Returns per-trajectory results for flexibility. Use aggregateResults()
 /// to combine into a single sample_result if needed.
