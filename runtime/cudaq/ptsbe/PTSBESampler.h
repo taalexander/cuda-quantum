@@ -76,6 +76,14 @@ namespace cudaq::ptsbe::detail {
 cudaq::sample_result
 aggregateResults(const std::vector<cudaq::sample_result> &results);
 
+/// @brief Aggregate per-trajectory results, consuming them.
+///
+/// Equivalent to the const overload but avoids the per-trajectory to_map()
+/// map copy. Use when the per-trajectory results are not needed afterwards
+/// (no execution data requested).
+cudaq::sample_result
+aggregateResults(std::vector<cudaq::sample_result> &&results);
+
 /// @brief Execute PTSBE batch on current simulator
 ///
 /// Handles runtime precision and custom simulator dispatch:

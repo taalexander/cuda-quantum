@@ -248,7 +248,12 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
   // Stage 5: Aggregate per-trajectory results. Flat pooling over per-shot
   // outcomes is the unbiased estimator for the uniform default allocation,
   // where every root carries multiplicity 1.
-  sample_result result(aggregateResults(perTrajectoryResults));
+  // When execution data is requested the per-trajectory results are attached
+  // below, so aggregate without consuming them; otherwise move their counts
+  // into the aggregate.
+  sample_result result(executionData
+                           ? aggregateResults(perTrajectoryResults)
+                           : aggregateResults(std::move(perTrajectoryResults)));
   result.set_record_layout(std::move(recordLayout));
 
   // Stage 6: Attach trajectories and set execution data on result if requested
