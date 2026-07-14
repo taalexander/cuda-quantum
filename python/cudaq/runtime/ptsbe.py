@@ -24,7 +24,9 @@ def _validate_ptsbe_args(kernel,
                          max_shots_per_path,
                          num_root_draws=None,
                          max_paths_per_root=None,
-                         max_live_states=None):
+                         max_live_states=None,
+                         allow_non_unitary=False,
+                         include_sequential_data=False):
     """Validate arguments common to `sample` and `sample_async`."""
     decorator = kernel
     if not isa_kernel_decorator(decorator):
@@ -41,18 +43,23 @@ def _validate_ptsbe_args(kernel,
             str(len(args)) + " given and " + str(decorator.formal_arity()) +
             " expected.")
 
-    if (not isinstance(shots_count, int)) or (shots_count < 0):
+    # bool is a subclass of int in Python, so isinstance(True, int) is True.
+    # Reject bool explicitly for the integer knobs to catch e.g.
+    # max_live_states=True silently meaning 1.
+    def _is_int(value):
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    if (not _is_int(shots_count)) or (shots_count < 0):
         raise RuntimeError(
             "Invalid `shots_count`. Must be a non-negative integer.")
 
     if max_trajectories is not None:
-        if (not isinstance(max_trajectories, int)) or (max_trajectories < 1):
+        if (not _is_int(max_trajectories)) or (max_trajectories < 1):
             raise RuntimeError(
                 "Invalid `max_trajectories`. Must be a positive integer.")
 
     if max_shots_per_path is not None:
-        if (not isinstance(max_shots_per_path, int)) or (max_shots_per_path
-                                                         < 0):
+        if (not _is_int(max_shots_per_path)) or (max_shots_per_path < 0):
             raise RuntimeError(
                 "Invalid `max_shots_per_path`. Must be a non-negative "
                 "integer.")
@@ -61,9 +68,14 @@ def _validate_ptsbe_args(kernel,
                         ("max_paths_per_root", max_paths_per_root),
                         ("max_live_states", max_live_states)):
         if value is not None:
-            if (not isinstance(value, int)) or (value < 1):
+            if (not _is_int(value)) or (value < 1):
                 raise RuntimeError("Invalid `" + name +
                                    "`. Must be a positive integer.")
+
+    for name, value in (("allow_non_unitary", allow_non_unitary),
+                        ("include_sequential_data", include_sequential_data)):
+        if not isinstance(value, bool):
+            raise RuntimeError("Invalid `" + name + "`. Must be a bool.")
 
     _detail_check_conditionals_on_measure(decorator)
 
@@ -136,13 +148,20 @@ def sample(kernel,
       max_paths_per_root (int or ``None``): Maximum replay paths sampled for
           one root. Configurations requiring more paths raise errors.
           ``None`` means unbounded.
-      max_live_states (int or ``None``): Maximum statevectors resident in
-          one path group of the branching frontier executor. ``None`` lets
-          the executor choose its capacity.
+      max_live_states (int or ``None``): Requested live frontier width, the
+          maximum number of statevectors that stay live in one path group of
+          the branching frontier executor. The resident allocation rounds this
+          up to the next power of two; the executor reports the requested width
+          and rounded capacity in its frontier metrics. ``None`` lets the
+          executor pick a width automatically: kernels with mid-circuit
+          measurement, reset, or admitted non-unitary Kraus channels use one
+          live state per replay path bounded by device memory.
       allow_non_unitary (bool): Admit general (non-unitary) Kraus channels.
           Admitted channels keep their raw operators and branch during
           replay at their true state-dependent probabilities. Requires a
-          batched simulator backend. Defaults to ``False``.
+          batched simulator backend. With ``max_live_states`` unset the
+          executor selects the frontier width automatically, so no capacity
+          knob is required. Defaults to ``False``.
 
     Returns:
       ``SampleResult``: Measurement results. Returns a list of results
@@ -164,7 +183,8 @@ def sample(kernel,
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
                                      max_trajectories, max_shots_per_path,
                                      num_root_draws, max_paths_per_root,
-                                     max_live_states)
+                                     max_live_states, allow_non_unitary,
+                                     include_sequential_data)
 
     if noise_model is None:
         noise_model = cudaq_runtime.NoiseModel()
@@ -236,10 +256,12 @@ def sample_async(kernel,
           draws before deduplication; see ``sample``.
       max_paths_per_root (int or ``None``): Maximum replay paths per root;
           see ``sample``.
-      max_live_states (int or ``None``): Maximum resident statevectors per
-          path group; see ``sample``.
+      max_live_states (int or ``None``): Requested live frontier width per
+          path group; ``None`` lets the executor pick automatically, including
+          for non-unitary channels. See ``sample``.
       allow_non_unitary (bool): Admit general (non-unitary) Kraus channels;
-          see ``sample``.
+          no capacity knob is required when ``max_live_states`` is unset. See
+          ``sample``.
 
     Returns:
       ``AsyncPTSBESampleResult``: A future whose ``.get()`` returns the
@@ -251,7 +273,8 @@ def sample_async(kernel,
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
                                      max_trajectories, max_shots_per_path,
                                      num_root_draws, max_paths_per_root,
-                                     max_live_states)
+                                     max_live_states, allow_non_unitary,
+                                     include_sequential_data)
 
     if noise_model is None:
         noise_model = cudaq_runtime.NoiseModel()

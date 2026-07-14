@@ -76,3 +76,22 @@ def test_ptsbe_sample_wrong_arity_single_argument_raises(
 def test_mcm_kernel_rejected(depol_noise, mcm_kernel):
     with pytest.raises(RuntimeError, match="conditional feedback|measurement"):
         cudaq.ptsbe.sample(mcm_kernel, noise_model=depol_noise)
+
+
+@pytest.mark.parametrize("knob", [
+    "shots_count", "max_trajectories", "max_shots_per_path", "num_root_draws",
+    "max_paths_per_root", "max_live_states"
+])
+def test_ptsbe_sample_rejects_bool_for_int_knobs(depol_noise, bell_kernel,
+                                                 knob):
+    # bool is a subclass of int in Python; the integer knobs must reject it
+    # rather than silently reading True as 1.
+    with pytest.raises(RuntimeError, match=knob):
+        cudaq.ptsbe.sample(bell_kernel, noise_model=depol_noise, **{knob: True})
+
+
+@pytest.mark.parametrize("flag",
+                         ["allow_non_unitary", "include_sequential_data"])
+def test_ptsbe_sample_rejects_non_bool_flags(depol_noise, bell_kernel, flag):
+    with pytest.raises(RuntimeError, match=flag):
+        cudaq.ptsbe.sample(bell_kernel, noise_model=depol_noise, **{flag: 1})

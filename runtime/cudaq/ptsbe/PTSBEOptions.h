@@ -58,11 +58,13 @@ struct PTSBEOptions {
   /// deduplication. When set, the default probabilistic strategy performs
   /// exactly D draws (discovering more than max_trajectories unique roots is
   /// an error, not a stopping rule), the sum of root multiplicities must
-  /// equal D, and PROPORTIONAL shot allocation becomes the exact root-weight
-  /// split N_u = shots * d_u / D. Flat results additionally require every
-  /// N_u * D to be divisible by d_u * shots; violations are errors, never
-  /// silently adjusted. When `nullopt`, root draws follow the strategy's own
-  /// budgeting and no root-weight conditions are enforced.
+  /// equal D, and PROPORTIONAL shot allocation is the exact root-weight
+  /// split N_u = shots * d_u / D. Flat results require N_u / total = d_u / D
+  /// exactly; proportional allocation errors when shots * d_u is not divisible
+  /// by D for a root. Violations are errors, never silently adjusted. When
+  /// `nullopt`, root
+  /// draws follow the strategy's own budgeting and no root-weight conditions
+  /// are enforced.
   std::optional<std::size_t> num_root_draws = std::nullopt;
 
   /// Maximum replay paths sampled for one root. The required path count is
@@ -71,17 +73,26 @@ struct PTSBEOptions {
   /// the path count per root is unbounded.
   std::optional<std::size_t> max_paths_per_root = std::nullopt;
 
-  /// Maximum statevectors resident in one path group of the branching
-  /// frontier executor. Deterministic capacity management, not statistical
-  /// tuning: replay paths are processed in groups no larger than this. When
-  /// `nullopt`, the executor chooses its capacity.
+  /// Requested live frontier width: the maximum number of statevectors that
+  /// stay live in one path group of the branching frontier executor.
+  /// Deterministic capacity management, not statistical tuning: replay paths
+  /// are processed in groups no larger than this. The resident allocation
+  /// rounds this width up to the next power of two; the executor reports both
+  /// the requested width and the rounded capacity in its frontier metrics.
+  /// When `nullopt`, the executor picks a width automatically: for kernels
+  /// with mid-circuit measurement, reset, or admitted non-unitary Kraus
+  /// channels it uses one live state per replay path, bounded by the
+  /// memory-derived batch size (floor 1). Non-unitary channels therefore need
+  /// no explicit width.
   std::optional<std::size_t> max_live_states = std::nullopt;
 
   /// Admit general (non-unitary) Kraus channels. Admitted channels keep
   /// their raw operators and are not pre-sampled into root trajectories;
   /// branch outcomes are drawn from their true state-dependent probabilities
-  /// during replay. Requires a BatchSimulator backend; the generic
-  /// per-trajectory sampler rejects non-unitary sites.
+  /// during replay on the branching frontier executor. When max_live_states
+  /// is unset the executor selects the frontier width automatically, so
+  /// non-unitary sampling needs no capacity knob. Requires a BatchSimulator
+  /// backend; the generic per-trajectory sampler rejects non-unitary sites.
   bool allow_non_unitary = false;
 
   /// Custom sampling strategy. If `nullptr`, uses default strategy.
