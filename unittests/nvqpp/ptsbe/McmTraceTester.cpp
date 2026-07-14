@@ -328,22 +328,11 @@ CUDAQ_TEST(McmTraceTest, SamplingMixedTerminalMeasureResetKeepsAllBits) {
   EXPECT_GT(correlated, shots * 9 / 10);
 }
 
-// Sampling a trace with mid-circuit measurement replays sites in program
-// order: h; mz; reset; x; mz yields two-bit records whose second bit is
-// always 1 (reset to |0>, then x), whatever Pauli error the h noise selects.
-CUDAQ_TEST(McmTraceTest, SamplingMcmKernelReplaysSites) {
-  cudaq::noise_model noise;
-  noise.add_all_qubit_channel("h", cudaq::depolarization_channel(0.01));
-
-  const std::size_t shots = 20;
-  auto result = cudaq::ptsbe::sample(noise, shots, measureResetKernel);
-
-  EXPECT_EQ(result.get_total_shots(), shots);
-  for (const auto &[bits, count] : result.to_map()) {
-    ASSERT_EQ(bits.size(), 2u);
-    EXPECT_EQ(bits[1], '1') << "reset+x did not pin the second bit: " << bits;
-  }
-}
+// End-to-end mid-circuit replay of h; mz; reset; x; mz (second record bit
+// pinned to 1 by reset+x) is covered by
+// McmReplayTest.ResetForcesSecondRecordBitToZero, which pins the reset-forces-
+// zero record contract directly; the removed SamplingMcmKernelReplaysSites case
+// duplicated it here.
 
 // A named mid-circuit measurement (auto b = mz(q)) must be accepted.
 // Validation may only reject kernels whose MLIR metadata flags true

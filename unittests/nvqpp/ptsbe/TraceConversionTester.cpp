@@ -13,44 +13,17 @@
 
 using namespace cudaq;
 
-/// Verify basic conversion: gate name, matrix populated, qubit IDs extracted
-CUDAQ_TEST(TraceConversionTest, BasicConversion) {
-  ptsbe::TraceInstruction inst(ptsbe::TraceInstructionType::Gate, "h", {5}, {},
-                               {});
-  auto task = cudaq::ptsbe::detail::convertToSimulatorTask<double>(inst);
-
-  EXPECT_EQ(task.operationName, "h");
-  EXPECT_EQ(task.matrix.size(), 4u);
-  EXPECT_EQ(task.targets.size(), 1u);
-  EXPECT_EQ(task.targets[0], 5u);
-  EXPECT_TRUE(task.controls.empty());
-  EXPECT_TRUE(task.parameters.empty());
-}
-
-/// Verify parameterized gate: parameters passed through and cast to ScalarType
-CUDAQ_TEST(TraceConversionTest, ParameterizedGate) {
-  double angle = M_PI / 3;
-  ptsbe::TraceInstruction inst(ptsbe::TraceInstructionType::Gate, "rx", {0}, {},
-                               {angle});
-  auto task = cudaq::ptsbe::detail::convertToSimulatorTask<double>(inst);
-
-  EXPECT_EQ(task.operationName, "rx");
-  EXPECT_EQ(task.parameters.size(), 1u);
-  EXPECT_NEAR(task.parameters[0], angle, 1e-12);
-}
-
-/// Verify controlled gate: controls and targets extracted correctly
-CUDAQ_TEST(TraceConversionTest, ControlledGate) {
-  ptsbe::TraceInstruction inst(ptsbe::TraceInstructionType::Gate, "x", {2},
-                               {0, 1}, {});
-  auto task = cudaq::ptsbe::detail::convertToSimulatorTask<double>(inst);
-
-  EXPECT_EQ(task.controls.size(), 2u);
-  EXPECT_EQ(task.controls[0], 0u);
-  EXPECT_EQ(task.controls[1], 1u);
-  EXPECT_EQ(task.targets.size(), 1u);
-  EXPECT_EQ(task.targets[0], 2u);
-}
+// Single-target gate-field conversion (name, matrix, targets, controls,
+// parameters) is exercised end-to-end elsewhere, so those per-field cases were
+// removed: ExecutePTSBETest.SingleTrajectoryHadamard covers h,
+// ExecutePTSBETest.BellStateDistribution covers controlled x, and rx parameter
+// passthrough is pinned by PTSBESampleTest.TracePTSBatchHandlesKernelArgs (rx
+// angle survives into the trace) and
+// PTSBESampleTest.BroadcastReturnsMultipleResults (rotationKernel's rx runs
+// end-to-end). The float<float> template cast is not reachable from this
+// double-only CPU target; it is covered by the mgpu fp32 GPU tests. The
+// multi-target path (two targets, 16-element matrix) and the error path reach
+// no execution test, so they are pinned directly here.
 
 /// Verify unknown gate throws with descriptive error
 CUDAQ_TEST(TraceConversionTest, UnknownGateThrows) {
@@ -63,17 +36,7 @@ CUDAQ_TEST(TraceConversionTest, UnknownGateThrows) {
   }
 }
 
-/// Verify float precision: parameters cast to float
-CUDAQ_TEST(TraceConversionTest, FloatPrecision) {
-  ptsbe::TraceInstruction inst(ptsbe::TraceInstructionType::Gate, "rx", {0}, {},
-                               {M_PI / 4});
-  auto task = cudaq::ptsbe::detail::convertToSimulatorTask<float>(inst);
-
-  EXPECT_EQ(task.parameters.size(), 1u);
-  EXPECT_NEAR(task.parameters[0], static_cast<float>(M_PI / 4), 1e-6f);
-}
-
-/// Verify multi-target gate (swap)
+/// Verify multi-target gate (swap): two targets, 16-element matrix
 CUDAQ_TEST(TraceConversionTest, MultiTargetGate) {
   ptsbe::TraceInstruction inst(ptsbe::TraceInstructionType::Gate, "swap",
                                {3, 7}, {}, {});

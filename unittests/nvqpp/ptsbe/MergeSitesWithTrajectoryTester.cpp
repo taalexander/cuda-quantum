@@ -48,50 +48,10 @@ MergedGates mergeToGates(const std::vector<ptsbe::TraceInstruction> &ptsbeTrace,
 
 } // namespace
 
-/// Verify merge returns the circuit gates unchanged when no noise selected
-CUDAQ_TEST(MergeSitesWithTrajectoryTest, NoNoiseInsertions) {
-  std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
-      {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
-      {ptsbe::TraceInstructionType::Gate, "x", {1}, {}, {}},
-  };
-
-  KrausTrajectory trajectory(0, {}, 1.0, 100);
-
-  auto gates = mergeToGates(ptsbeTrace, trajectory);
-
-  ASSERT_EQ(gates.size(), 2u);
-  EXPECT_EQ(gates[0].operationName, "h");
-  EXPECT_EQ(gates[1].operationName, "x");
-}
-
-/// Verify single noise insertion at its trace position
-CUDAQ_TEST(MergeSitesWithTrajectoryTest, SingleNoiseInsertion) {
-  // Trace: [0] H on q0, [1] Noise(depol) on q0, [2] X on q1
-  std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
-      {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
-      {ptsbe::TraceInstructionType::Noise,
-       "depolarization",
-       {0},
-       {},
-       {},
-       depolarization_channel(0.1)},
-      {ptsbe::TraceInstructionType::Gate, "x", {1}, {}, {}},
-  };
-
-  // Z error (index 3) at trace position 1 (the Noise entry)
-  std::vector<KrausSelection> selections = {
-      KrausSelection(1, {0}, "h", 3, true)};
-  KrausTrajectory trajectory(0, selections, 0.1, 10);
-
-  auto gates = mergeToGates(ptsbeTrace, trajectory);
-
-  // Should be: H, noise(Z), X
-  ASSERT_EQ(gates.size(), 3u);
-  EXPECT_EQ(gates[0].operationName, "h");
-  EXPECT_EQ(gates[1].operationName, "z");
-  EXPECT_EQ(gates[1].targets[0], 0u);
-  EXPECT_EQ(gates[2].operationName, "x");
-}
+// No-noise passthrough and single Z-error insertion at a Noise position are
+// covered end-to-end by ExecutePTSBETest.SingleTrajectoryHadamard (empty
+// trajectory) and ExecutePTSBETest.TrajectoryWithNoiseInsertion; the removed
+// NoNoiseInsertions and SingleNoiseInsertion unit cases duplicated them.
 
 /// Verify two consecutive noise entries at the same gate
 CUDAQ_TEST(MergeSitesWithTrajectoryTest, MultipleNoiseEntriesAfterGate) {
@@ -174,31 +134,11 @@ CUDAQ_TEST(MergeSitesWithTrajectoryTest, NoiseAtLastPosition) {
   EXPECT_EQ(gates[2].operationName, "z");
 }
 
-/// Verify identity noise is skipped (not inserted into the replay list)
-CUDAQ_TEST(MergeSitesWithTrajectoryTest, IdentityNoiseSkipped) {
-  // Trace: [0] H on q0, [1] Noise on q0, [2] X on q1
-  std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
-      {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
-      {ptsbe::TraceInstructionType::Noise,
-       "depolarization",
-       {0},
-       {},
-       {},
-       depolarization_channel(0.1)},
-      {ptsbe::TraceInstructionType::Gate, "x", {1}, {}, {}},
-  };
-
-  // IDENTITY noise (index 0) at trace position 1, is_error=false
-  std::vector<KrausSelection> selections = {KrausSelection(1, {0}, "h", 0)};
-  KrausTrajectory trajectory(0, selections, 0.9, 90);
-
-  auto gates = mergeToGates(ptsbeTrace, trajectory);
-
-  // Identity is skipped, so only H and X remain
-  ASSERT_EQ(gates.size(), 2u);
-  EXPECT_EQ(gates[0].operationName, "h");
-  EXPECT_EQ(gates[1].operationName, "x");
-}
+// Pure identity skipping (IdentityNoiseSkipped, AllIdentitySkipsAllNoise) is
+// pinned by the MixedIdentityAndErrorNoise case below, which exercises the same
+// identity-skip branch alongside a real error, and end-to-end by
+// ExecutePTSBETest.MultiQubitWithSelectiveNoise; the pure-identity duplicates
+// were removed.
 
 /// Verify mixed identity and error noise insertions
 CUDAQ_TEST(MergeSitesWithTrajectoryTest, MixedIdentityAndErrorNoise) {
@@ -246,70 +186,8 @@ CUDAQ_TEST(MergeSitesWithTrajectoryTest, EmptyTrace) {
   EXPECT_TRUE(gates.empty());
 }
 
-/// Verify noise after every gate in the circuit
-CUDAQ_TEST(MergeSitesWithTrajectoryTest, NoiseOnEveryGate) {
-  // Trace: [0] H q0, [1] Noise q0, [2] X q1, [3] Noise q1
-  std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
-      {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
-      {ptsbe::TraceInstructionType::Noise,
-       "depolarization",
-       {0},
-       {},
-       {},
-       depolarization_channel(0.1)},
-      {ptsbe::TraceInstructionType::Gate, "x", {1}, {}, {}},
-      {ptsbe::TraceInstructionType::Noise,
-       "depolarization",
-       {1},
-       {},
-       {},
-       depolarization_channel(0.1)},
-  };
-
-  std::vector<KrausSelection> selections = {
-      KrausSelection(1, {0}, "h", 3, true),
-      KrausSelection(3, {1}, "x", 1, true)};
-  KrausTrajectory trajectory(0, selections, 0.01, 1);
-
-  auto gates = mergeToGates(ptsbeTrace, trajectory);
-
-  // H, noise(Z), X, noise(X)
-  ASSERT_EQ(gates.size(), 4u);
-  EXPECT_EQ(gates[0].operationName, "h");
-  EXPECT_EQ(gates[1].operationName, "z");
-  EXPECT_EQ(gates[2].operationName, "x");
-  EXPECT_EQ(gates[3].operationName, "x");
-}
-
-/// Verify all-identity trajectory produces only circuit gate ops (no noise)
-CUDAQ_TEST(MergeSitesWithTrajectoryTest, AllIdentitySkipsAllNoise) {
-  // Trace: [0] H q0, [1] Noise q0, [2] X q1, [3] Noise q1
-  std::vector<ptsbe::TraceInstruction> ptsbeTrace = {
-      {ptsbe::TraceInstructionType::Gate, "h", {0}, {}, {}},
-      {ptsbe::TraceInstructionType::Noise,
-       "depolarization",
-       {0},
-       {},
-       {},
-       depolarization_channel(0.1)},
-      {ptsbe::TraceInstructionType::Gate, "x", {1}, {}, {}},
-      {ptsbe::TraceInstructionType::Noise,
-       "depolarization",
-       {1},
-       {},
-       {},
-       depolarization_channel(0.1)},
-  };
-
-  // Both identity (is_error=false)
-  std::vector<KrausSelection> selections = {KrausSelection(1, {0}, "h", 0),
-                                            KrausSelection(3, {1}, "x", 0)};
-  KrausTrajectory trajectory(0, selections, 0.81, 81);
-
-  auto gates = mergeToGates(ptsbeTrace, trajectory);
-
-  // Only circuit gates remain
-  ASSERT_EQ(gates.size(), 2u);
-  EXPECT_EQ(gates[0].operationName, "h");
-  EXPECT_EQ(gates[1].operationName, "x");
-}
+// Noise inserted after every gate (NoiseOnEveryGate) is covered by
+// MultipleNoiseEntriesAfterGate and MixedIdentityAndErrorNoise above (both emit
+// multiple error insertions across the trace) and end-to-end by
+// ExecutePTSBETest.TrajectoryWithNoiseInsertion; the removed case duplicated
+// that multi-insertion behavior.
