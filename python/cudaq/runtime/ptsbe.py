@@ -41,8 +41,8 @@ def _validate_ptsbe_args(kernel,
             str(len(args)) + " given and " + str(decorator.formal_arity()) +
             " expected.")
 
-    # bool is a subclass of int in Python, so isinstance(True, int) is True.
-    # Reject bool explicitly for the integer knobs to catch e.g.
+    # bool is a subclass of int in Python, so a True value passes an int
+    # type check. Reject bool explicitly for the integer knobs to catch e.g.
     # max_live_states=True silently meaning 1.
     def _is_int(value):
         return isinstance(value, int) and not isinstance(value, bool)
