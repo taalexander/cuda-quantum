@@ -133,8 +133,8 @@ GateTask<ScalarType> convertToSimulatorTask(const TraceInstruction &inst) {
   auto gateName = nvqir::getGateNameFromString(inst.name);
   auto matrix = nvqir::getGateByName<ScalarType>(gateName, typedParams);
 
-  return GateTask<ScalarType>(inst.name, matrix, inst.controls, inst.targets,
-                              typedParams);
+  return GateTask<ScalarType>(inst.name, std::move(matrix), inst.controls,
+                              inst.targets, std::move(typedParams));
 }
 
 template <typename ScalarType>
@@ -169,7 +169,8 @@ GateTask<ScalarType> krausSelectionToTask(const cudaq::KrausSelection &sel,
     opName = channel.op_names[k];
   else
     opName = channel.get_type_name() + "[" + std::to_string(k) + "]";
-  return GateTask<ScalarType>(opName, matrix, {}, sel.qubits, {});
+  return GateTask<ScalarType>(std::move(opName), std::move(matrix), {},
+                              sel.qubits, {});
 }
 
 template GateTask<float>
@@ -210,6 +211,34 @@ aggregateResults(const std::vector<cudaq::sample_result> &results) {
                                std::make_move_iterator(seq.end()));
   }
   cudaq::ExecutionResult er{aggregatedCounts};
+  er.sequentialData = std::move(aggregatedSeqData);
+  return cudaq::sample_result{std::move(er)};
+}
+
+cudaq::sample_result
+aggregateResults(std::vector<cudaq::sample_result> &&results) {
+  if (results.empty())
+    return cudaq::sample_result{};
+
+  // The caller no longer needs the per-trajectory results, so iterate each
+  // trajectory's counts in place (to_map() would duplicate the whole map)
+  // and move its sequential data out.
+  cudaq::CountsDictionary aggregatedCounts;
+  std::vector<std::string> aggregatedSeqData;
+  for (auto &res : results) {
+    if (res.get_total_shots() == 0)
+      continue;
+
+    for (auto it = res.cbegin(); it != res.cend(); ++it)
+      aggregatedCounts[it->first] += it->second;
+
+    auto seq = res.sequential_data();
+    if (!seq.empty())
+      aggregatedSeqData.insert(aggregatedSeqData.end(),
+                               std::make_move_iterator(seq.begin()),
+                               std::make_move_iterator(seq.end()));
+  }
+  cudaq::ExecutionResult er{std::move(aggregatedCounts)};
   er.sequentialData = std::move(aggregatedSeqData);
   return cudaq::sample_result{std::move(er)};
 }

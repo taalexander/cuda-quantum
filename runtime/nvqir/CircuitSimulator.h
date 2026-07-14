@@ -524,18 +524,21 @@ public:
   /// operation, a set of possible control qubit indices, and a set of target
   /// indices.
   struct GateApplicationTask {
-    const std::string operationName;
-    const std::vector<std::complex<ScalarType>> matrix;
-    const std::vector<std::size_t> controls;
-    const std::vector<std::size_t> targets;
-    const std::vector<ScalarType> parameters;
-    GateApplicationTask(const std::string &name,
-                        const std::vector<std::complex<ScalarType>> &m,
-                        const std::vector<std::size_t> &c,
-                        const std::vector<std::size_t> &t,
-                        const std::vector<ScalarType> &params)
-        : operationName(name), matrix(m), controls(c), targets(t),
-          parameters(params) {}
+    std::string operationName;
+    std::vector<std::complex<ScalarType>> matrix;
+    std::vector<std::size_t> controls;
+    std::vector<std::size_t> targets;
+    std::vector<ScalarType> parameters;
+    // Payloads are taken by value so callers with temporaries move them in;
+    // non-const members let a task move (queue growth, vector reallocation)
+    // instead of copying its matrix and operand buffers.
+    GateApplicationTask(std::string name,
+                        std::vector<std::complex<ScalarType>> m,
+                        std::vector<std::size_t> c, std::vector<std::size_t> t,
+                        std::vector<ScalarType> params)
+        : operationName(std::move(name)), matrix(std::move(m)),
+          controls(std::move(c)), targets(std::move(t)),
+          parameters(std::move(params)) {}
   };
 
 protected:
