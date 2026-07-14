@@ -18,6 +18,8 @@
 #include <vector>
 
 using namespace cudaq::ptsbe;
+using cudaq::ptsbe::detail::mergeSitesWithTrajectory;
+using cudaq::ptsbe::detail::ReplayOpKind;
 
 namespace {
 
@@ -298,8 +300,9 @@ PTSBETrace makeSiteTrace() {
 } // namespace
 
 // Replay ops come out in trace order with one op per site: Gate for circuit
-// gates and selected noise operators, Measure / Reset / MeasureReset for
-// their sites, carrying the site's qubits.
+// gates and selected noise operators, and one Measure op per measurement,
+// reset, or fused measure-and-reset site, distinguished by recordOffset and
+// resetAfter and carrying the site's qubits.
 CUDAQ_TEST(McmReplayTest, MergeSitesEmitsOpKindsInTraceOrder) {
   auto trace = makeSiteTrace();
 
@@ -317,15 +320,25 @@ CUDAQ_TEST(McmReplayTest, MergeSitesEmitsOpKindsInTraceOrder) {
   EXPECT_EQ(ops[0].task->operationName, "h");
   EXPECT_EQ(ops[1].kind, ReplayOpKind::Gate);
   EXPECT_EQ(ops[1].task->operationName, "z");
-  EXPECT_EQ(ops[2].kind, ReplayOpKind::MeasureReset);
+  // Fused measure-and-reset: a Measure op that records and resets.
+  EXPECT_EQ(ops[2].kind, ReplayOpKind::Measure);
+  EXPECT_TRUE(ops[2].resetAfter);
+  EXPECT_TRUE(ops[2].recordOffset.has_value());
   EXPECT_EQ(ops[2].qubits, (std::vector<std::size_t>{0}));
   EXPECT_EQ(ops[3].kind, ReplayOpKind::Gate);
   EXPECT_EQ(ops[3].task->operationName, "x");
+  // Plain measurement: records, does not reset.
   EXPECT_EQ(ops[4].kind, ReplayOpKind::Measure);
+  EXPECT_FALSE(ops[4].resetAfter);
+  EXPECT_TRUE(ops[4].recordOffset.has_value());
   EXPECT_EQ(ops[4].qubits, (std::vector<std::size_t>{0}));
-  EXPECT_EQ(ops[5].kind, ReplayOpKind::Reset);
+  // Bare reset: a Measure op that resets without recording.
+  EXPECT_EQ(ops[5].kind, ReplayOpKind::Measure);
+  EXPECT_TRUE(ops[5].resetAfter);
+  EXPECT_FALSE(ops[5].recordOffset.has_value());
   EXPECT_EQ(ops[5].qubits, (std::vector<std::size_t>{1}));
   EXPECT_EQ(ops[6].kind, ReplayOpKind::Measure);
+  EXPECT_FALSE(ops[6].resetAfter);
   EXPECT_EQ(ops[6].qubits, (std::vector<std::size_t>{1}));
 }
 

@@ -17,7 +17,7 @@
 #include <span>
 #include <stdexcept>
 
-namespace cudaq::ptsbe {
+namespace cudaq::ptsbe::detail {
 
 template <typename ScalarType>
 TrajectoryReplay<ScalarType>
@@ -56,23 +56,24 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
         replay.ops.emplace_back(&inst.channel.value(), inst.targets);
       break;
     case TraceInstructionType::Measurement:
-      replay.ops.emplace_back(ReplayOpKind::Measure, inst.targets,
-                              inst.record_index);
+      replay.ops.emplace_back(inst.targets, inst.record_index,
+                              /*resetAfter=*/false);
       break;
     case TraceInstructionType::Reset:
-      replay.ops.emplace_back(ReplayOpKind::Reset, inst.targets, std::nullopt);
+      replay.ops.emplace_back(inst.targets, std::nullopt,
+                              /*resetAfter=*/true);
       break;
     case TraceInstructionType::MeasureReset:
-      replay.ops.emplace_back(ReplayOpKind::MeasureReset, inst.targets,
-                              inst.record_index);
+      replay.ops.emplace_back(inst.targets, inst.record_index,
+                              /*resetAfter=*/true);
       break;
     }
 
     while (noiseIdx < selections.size() &&
            selections[noiseIdx].circuit_location == i) {
       if (includeIdentity || selections[noiseIdx].is_error) {
-        replay.krausTasks.push_back(detail::krausSelectionToTask<ScalarType>(
-            selections[noiseIdx], inst));
+        replay.krausTasks.push_back(
+            krausSelectionToTask<ScalarType>(selections[noiseIdx], inst));
         replay.ops.emplace_back(&replay.krausTasks.back());
       }
       ++noiseIdx;
@@ -98,6 +99,10 @@ mergeSitesWithTrajectory<double>(std::span<const TraceInstruction>,
                                  std::span<const GateTask<double>>,
                                  const cudaq::KrausTrajectory &, bool);
 
+} // namespace cudaq::ptsbe::detail
+
+namespace cudaq::ptsbe {
+
 std::size_t PTSBatch::totalShots() const {
   std::size_t total = 0;
   for (const auto &traj : trajectories)
@@ -106,15 +111,12 @@ std::size_t PTSBatch::totalShots() const {
 }
 
 std::size_t PTSBatch::numRecordBits() const {
-  // PTSBatch is public, so a hand-built trace may carry record indices in
-  // any order. The max-scan sizes the record correctly regardless; the
-  // per-shot replay writes record[record_index + k] and must never run
-  // past the end.
-  std::size_t bits = 0;
-  for (const auto &inst : trace)
-    if (inst.record_index)
-      bits = std::max(bits, *inst.record_index + inst.targets.size());
-  return bits;
+  // Single-sourced through computeTraceLayout: PTSBatch is public, so a
+  // hand-built trace may carry record indices in any order, and the layout
+  // sizes the record from the maximum record_index + target count. The
+  // per-shot replay writes record[record_index + k] and must never run past
+  // the end.
+  return computeTraceLayout(trace).numRecordBits;
 }
 
 } // namespace cudaq::ptsbe
@@ -212,6 +214,39 @@ aggregateResults(const std::vector<cudaq::sample_result> &results) {
   return cudaq::sample_result{std::move(er)};
 }
 
+// Per-shot replay primitives for nvqir::CircuitSimulator: measure sites
+// collapse each qubit with mz and (for measure-and-reset or bare reset sites)
+// return it to |0>. flushGateQueue runs before each measurement and once at
+// the end of a shot, because setToZeroState does not clear the pending gate
+// queue (see CircuitSimulatorBase::deallocateQubits).
+template <typename ScalarType>
+struct GenericPerShotPolicy {
+  nvqir::CircuitSimulatorBase<ScalarType> &simulator;
+
+  void setToZeroState() { simulator.setToZeroState(); }
+
+  void applyGate(const GateTask<ScalarType> &task) {
+    simulator.applyGate(task);
+  }
+
+  void measureSite(const ReplayOp<ScalarType> &op, std::string &record) {
+    simulator.flushGateQueue();
+    if (op.recordOffset) {
+      for (std::size_t k = 0; k < op.qubits.size(); ++k) {
+        const bool bit = simulator.mz(op.qubits[k]);
+        record[*op.recordOffset + k] = bit ? '1' : '0';
+        if (op.resetAfter)
+          simulator.resetQubit(op.qubits[k]);
+      }
+    } else {
+      for (auto qubit : op.qubits)
+        simulator.resetQubit(qubit);
+    }
+  }
+
+  void finishShot() { simulator.flushGateQueue(); }
+};
+
 template <typename ScalarType>
 std::vector<cudaq::sample_result>
 samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
@@ -276,8 +311,8 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
       continue;
     }
 
-    auto replay = cudaq::ptsbe::mergeSitesWithTrajectory<ScalarType>(
-        batch.trace, gateCacheView, traj);
+    auto replay =
+        mergeSitesWithTrajectory<ScalarType>(batch.trace, gateCacheView, traj);
 
     if (!batch.hasMidCircuitMeasurement) {
       simulator.setToZeroState();
@@ -298,55 +333,14 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
     } else {
       // Site-ordered per-shot replay: every measuring site (mid-circuit and
       // terminal) collapses via mz and writes its bit into the record, so no
-      // separate terminal sampling pass runs. Each shot replays
-      // independently to keep records within one trajectory decorrelated.
-      // Records aggregate into counts; the per-shot list materializes only
-      // when sequential data was requested.
-      cudaq::CountsDictionary counts;
-      std::vector<std::string> sequentialData;
-      if (batch.includeSequentialData)
-        sequentialData.reserve(traj.num_shots);
-
-      for (std::size_t shot = 0; shot < traj.num_shots; ++shot) {
-        simulator.setToZeroState();
-        std::string record(numRecordBits, '0');
-
-        for (const auto &op : replay.ops) {
-          switch (op.kind) {
-          case ReplayOpKind::Gate:
-            simulator.applyGate(*op.task);
-            break;
-          case ReplayOpKind::Measure:
-          case ReplayOpKind::MeasureReset:
-            simulator.flushGateQueue();
-            for (std::size_t k = 0; k < op.qubits.size(); ++k) {
-              const bool bit = simulator.mz(op.qubits[k]);
-              if (op.recordOffset)
-                record[*op.recordOffset + k] = bit ? '1' : '0';
-              if (op.kind == ReplayOpKind::MeasureReset)
-                simulator.resetQubit(op.qubits[k]);
-            }
-            break;
-          case ReplayOpKind::Reset:
-            simulator.flushGateQueue();
-            for (auto qubit : op.qubits)
-              simulator.resetQubit(qubit);
-            break;
-          case ReplayOpKind::KrausBranch:
-            // Unreachable: non-unitary sites are rejected before replay.
-            throw std::runtime_error(
-                "PTSBE generic replay cannot execute a KrausBranch site.");
-          }
-        }
-        simulator.flushGateQueue();
-
-        ++counts[record];
-        if (batch.includeSequentialData)
-          sequentialData.push_back(std::move(record));
-      }
-
-      cudaq::ExecutionResult er{std::move(counts)};
-      er.sequentialData = std::move(sequentialData);
+      // separate terminal sampling pass runs. Each shot replays independently
+      // to keep records within one trajectory decorrelated. Records aggregate
+      // into counts; the per-shot list materializes only when sequential data
+      // was requested.
+      GenericPerShotPolicy<ScalarType> policy{simulator};
+      auto er = replayTrajectoryPerShot<ScalarType>(
+          replay.ops, traj.num_shots, numRecordBits,
+          batch.includeSequentialData, policy);
       results.push_back(cudaq::sample_result{std::move(er)});
     }
 

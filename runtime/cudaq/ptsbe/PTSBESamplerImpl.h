@@ -26,6 +26,8 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -33,12 +35,20 @@ namespace cudaq::ptsbe {
 
 // Abstract interface for batch simulator
 // Simulators can optionally implement this interface to provide a custom
-// implementation of sampleWithPTSBE.
+// implementation of sampleWithPTSBE. sampleWithPTSBE(const PTSBatch &) is the
+// only cross-repo contract: a custom backend consumes the public PTSBatch and
+// returns per-trajectory results. The replay representation it walks internally
+// (see cudaq::ptsbe::detail below) is an implementation detail shared with the
+// generic executor, not part of the public API.
 struct BatchSimulator {
   virtual ~BatchSimulator() = default;
   virtual std::vector<cudaq::sample_result>
   sampleWithPTSBE(const PTSBatch &batch) = 0;
 };
+
+} // namespace cudaq::ptsbe
+
+namespace cudaq::ptsbe::detail {
 
 /// @brief Alias for CircuitSimulator gate task type
 template <typename ScalarType>
@@ -46,33 +56,42 @@ using GateTask =
     typename nvqir::CircuitSimulatorBase<ScalarType>::GateApplicationTask;
 
 /// @brief Kind of operation replayed at one site of a merged trajectory.
-enum class ReplayOpKind { Gate, Measure, Reset, MeasureReset, KrausBranch };
+///
+/// Measure covers every measurement/reset branch site: a plain measurement, a
+/// fused measure-and-reset, and a bare reset are one probability-and-collapse
+/// operation distinguished by ReplayOp::recordOffset (whether a bit is
+/// recorded) and ReplayOp::resetAfter (whether the collapsed qubits return to
+/// |0>). KrausBranch marks a general (non-unitary) Kraus site.
+enum class ReplayOpKind { Gate, Measure, KrausBranch };
 
 /// @brief One site-ordered operation in a merged trajectory replay list.
 ///
 /// Gate ops reference a simulator gate task they do not own: trace gates
 /// live in the caller's per-batch gate cache (see convertTraceGates) and
-/// resolved Kraus selections live in the enclosing TrajectoryReplay. Measure,
-/// Reset, and MeasureReset ops carry the site's target qubits; measuring ops
-/// additionally carry the position of their bit in the per-shot measurement
-/// record. KrausBranch ops mark general (non-unitary) Kraus sites whose
-/// branch is selected during replay from its true state-dependent
-/// probabilities; they carry the site's qubits and a non-owning pointer to
-/// the raw channel in the caller's trace, which must outlive the replay.
+/// resolved Kraus selections live in the enclosing TrajectoryReplay. Measure
+/// ops carry the site's target qubits, an optional record offset (set for a
+/// recorded measurement, empty for a bare reset), and resetAfter (true when
+/// the site returns its qubits to |0> after collapse). KrausBranch ops mark
+/// general (non-unitary) Kraus sites whose branch is selected during replay
+/// from its true state-dependent probabilities; they carry the site's qubits
+/// and a non-owning pointer to the raw channel in the caller's trace, which
+/// must outlive the replay.
 template <typename ScalarType>
 struct ReplayOp {
   ReplayOpKind kind;
   const GateTask<ScalarType> *task = nullptr;
   std::vector<std::size_t> qubits;
   std::optional<std::size_t> recordOffset;
+  bool resetAfter = false;
   const cudaq::kraus_channel *channel = nullptr;
 
   explicit ReplayOp(const GateTask<ScalarType> *gateTask)
       : kind(ReplayOpKind::Gate), task(gateTask) {}
 
-  ReplayOp(ReplayOpKind kind, std::vector<std::size_t> qubits,
-           std::optional<std::size_t> recordOffset)
-      : kind(kind), qubits(std::move(qubits)), recordOffset(recordOffset) {}
+  ReplayOp(std::vector<std::size_t> qubits,
+           std::optional<std::size_t> recordOffset, bool resetAfter)
+      : kind(ReplayOpKind::Measure), qubits(std::move(qubits)),
+        recordOffset(recordOffset), resetAfter(resetAfter) {}
 
   ReplayOp(const cudaq::kraus_channel *branchChannel,
            std::vector<std::size_t> qubits)
@@ -106,8 +125,8 @@ struct TrajectoryReplay {
 /// are resolved to Gate ops owned by the returned replay via the trajectory
 /// selections, non-unitary Noise entries become KrausBranch ops referencing
 /// the raw channel in the trace (which must outlive the replay), and
-/// Measurement, Reset, and MeasureReset entries become their op kinds
-/// carrying the site's qubits and record offset.
+/// Measurement, Reset, and MeasureReset entries become Measure ops carrying
+/// the site's qubits, record offset, and resetAfter flag.
 ///
 /// @param includeIdentity When true, identity Kraus operators are
 ///   included as Gate ops. Useful if you require all trajectories to have
@@ -119,9 +138,57 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
                          const cudaq::KrausTrajectory &trajectory,
                          bool includeIdentity = false);
 
-} // namespace cudaq::ptsbe
+/// @brief Per-shot replay of one trajectory's site-ordered op list, shared by
+/// the generic CircuitSimulator fallback (samplePTSBEGeneric) and the base
+/// batched executor's sequential fallback (replayWithMeasureSites). Each shot
+/// restarts from the zero state and walks the ops in program order, writing a
+/// fixed-width record: measurement sites store their collapsed bit at the
+/// site's record offset. Records aggregate into counts; the per-shot list
+/// materializes only when includeSequentialData is set.
+///
+/// Policy supplies the backend primitives setToZeroState(),
+/// applyGate(GateTask), measureSite(ReplayOp, record), and finishShot().
+/// measureSite flushes queued gates, collapses op.qubits with the backend's
+/// random stream, writes bit k at record[*op.recordOffset + k] when
+/// op.recordOffset is set, and resets the qubits when op.resetAfter (a bare
+/// reset carries no record offset). finishShot handles any end-of-shot flush.
+template <typename ScalarType, typename Policy>
+cudaq::ExecutionResult
+replayTrajectoryPerShot(const std::vector<ReplayOp<ScalarType>> &ops,
+                        std::size_t shots, std::size_t numRecordBits,
+                        bool includeSequentialData, Policy &policy) {
+  cudaq::ExecutionResult counts;
+  if (shots == 0)
+    return counts;
+  if (includeSequentialData)
+    counts.sequentialData.reserve(shots);
 
-namespace cudaq::ptsbe::detail {
+  for (std::size_t shot = 0; shot < shots; ++shot) {
+    policy.setToZeroState();
+    std::string record(numRecordBits, '0');
+    for (const auto &op : ops) {
+      switch (op.kind) {
+      case ReplayOpKind::Gate:
+        policy.applyGate(*op.task);
+        break;
+      case ReplayOpKind::Measure:
+        policy.measureSite(op, record);
+        break;
+      case ReplayOpKind::KrausBranch:
+        throw std::runtime_error(
+            "PTSBE per-shot replay cannot execute a KrausBranch site: "
+            "non-unitary Kraus sites branch at state-dependent probabilities "
+            "and require the single-process batched frontier executor.");
+      }
+    }
+    policy.finishShot();
+
+    ++counts.counts[record];
+    if (includeSequentialData)
+      counts.sequentialData.push_back(std::move(record));
+  }
+  return counts;
+}
 
 /// @brief Convert a PTSBE TraceInstruction (Gate type) to a simulator task.
 /// Looks up the gate matrix from the registry and maps plain qubit IDs.

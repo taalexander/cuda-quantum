@@ -79,8 +79,7 @@ def test_mcm_kernel_rejected(depol_noise, mcm_kernel):
 
 
 @pytest.mark.parametrize("knob", [
-    "shots_count", "max_trajectories", "max_shots_per_path", "num_root_draws",
-    "max_paths_per_root", "max_live_states"
+    "shots_count", "max_trajectories", "max_shots_per_path", "max_live_states"
 ])
 def test_ptsbe_sample_rejects_bool_for_int_knobs(depol_noise, bell_kernel,
                                                  knob):

@@ -37,33 +37,38 @@ std::size_t countInstructions(std::span<const TraceInstruction> trace,
   return count;
 }
 
-bool hasMidCircuitMeasurement(std::span<const TraceInstruction> trace) {
-  // Single backward walk: a measure or reset site is mid-circuit iff some
-  // later instruction touches one of its targets.
-  std::vector<bool> touchedLater;
-  const auto touched = [&touchedLater](std::size_t id) {
-    return id < touchedLater.size() && touchedLater[id];
-  };
-  const auto markTouched = [&touchedLater](std::size_t id) {
-    if (id >= touchedLater.size())
-      touchedLater.resize(id + 1, false);
-    touchedLater[id] = true;
-  };
-
-  for (auto it = trace.rbegin(); it != trace.rend(); ++it) {
-    const auto &inst = *it;
-    if (inst.type == TraceInstructionType::Measurement ||
-        inst.type == TraceInstructionType::MeasureReset ||
-        inst.type == TraceInstructionType::Reset)
-      for (auto id : inst.targets)
-        if (touched(id))
-          return true;
-    for (auto id : inst.targets)
-      markTouched(id);
-    for (auto id : inst.controls)
-      markTouched(id);
+TraceLayout computeTraceLayout(std::span<const TraceInstruction> trace) {
+  TraceLayout layout;
+  auto &lastTouch = layout.lastTouchIndex;
+  for (std::size_t i = 0; i < trace.size(); ++i) {
+    for (auto id : trace[i].targets)
+      lastTouch[id] = i;
+    for (auto id : trace[i].controls)
+      lastTouch[id] = i;
   }
-  return false;
+
+  for (std::size_t i = 0; i < trace.size(); ++i) {
+    const auto &inst = trace[i];
+    const bool measuring = inst.type == TraceInstructionType::Measurement ||
+                           inst.type == TraceInstructionType::MeasureReset;
+    if (!measuring && inst.type != TraceInstructionType::Reset)
+      continue;
+    // A measure or reset site is mid-circuit when one of its targets is
+    // touched by a later instruction.
+    for (auto id : inst.targets) {
+      const auto found = lastTouch.find(id);
+      if (found != lastTouch.end() && found->second > i)
+        layout.hasMidCircuitMeasurement = true;
+    }
+    if (measuring && inst.record_index)
+      layout.numRecordBits = std::max(layout.numRecordBits,
+                                      *inst.record_index + inst.targets.size());
+  }
+  return layout;
+}
+
+bool hasMidCircuitMeasurement(std::span<const TraceInstruction> trace) {
+  return computeTraceLayout(trace).hasMidCircuitMeasurement;
 }
 
 std::size_t

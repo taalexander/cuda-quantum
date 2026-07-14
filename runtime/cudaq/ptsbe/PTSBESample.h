@@ -252,9 +252,8 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
   policy.batch = &batch;
 
   // executeBatch aggregates per-trajectory results inside finalizePTSBE. Flat
-  // pooling equals the root-weighted estimator f_hat = sum_u(d_u * fbar_u) / D
-  // whenever num_root_draws is set, because validateFrontierAllocation enforces
-  // N_u / total = d_u / D exactly.
+  // pooling over per-shot outcomes is the unbiased estimator for the uniform
+  // default allocation, where every root carries multiplicity 1.
   sample_result result = executeBatch(policy);
   result.set_record_layout(std::move(recordLayout));
 
