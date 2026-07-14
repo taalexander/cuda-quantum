@@ -228,8 +228,9 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
            nanobind::arg("seed") = nanobind::none(),
            nanobind::arg("max_trajectory_samples") = nanobind::none(),
            nanobind::arg("num_root_draws") = nanobind::none(),
-           "Create a probabilistic strategy with optional random seed and "
-           "max trajectory sample count. When seed is None (default), uses "
+           "Create a probabilistic strategy with optional random seed, "
+           "max trajectory sample count, and fixed root-draw count. When seed "
+           "is None (default), uses "
            "CUDA-Q's global random seed. "
            "max_trajectory_samples sets a ceiling on Monte Carlo draws. "
            "The loop stops early once max_trajectories unique patterns are "
@@ -516,11 +517,14 @@ Args:
     deduplication, or None for strategy-controlled budgeting.
   max_paths_per_root: Maximum replay paths sampled for one root, or None
     for unbounded. Configurations requiring more paths are errors.
-  max_live_states: Maximum statevectors resident in one path group of the
-    branching frontier executor, or None to let the executor choose.
+  max_live_states: Requested live frontier width per path group of the
+    branching frontier executor; the resident allocation rounds up to the
+    next power of two. None lets the executor pick a width automatically,
+    including for non-unitary channels.
   allow_non_unitary: Admit general (non-unitary) Kraus channels; branches
     are selected during replay at their true state-dependent probabilities.
-    Requires a batched simulator backend.
+    Requires a batched simulator backend. No capacity knob is required when
+    max_live_states is unset.
   *arguments: The kernel arguments.
 
 Returns:
