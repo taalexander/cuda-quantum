@@ -49,8 +49,6 @@ pySamplePTSBE(const std::string &shortName, MlirModule module,
               std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
               bool return_execution_data, bool include_sequential_data,
               std::optional<std::size_t> max_shots_per_path,
-              std::optional<std::size_t> num_root_draws,
-              std::optional<std::size_t> max_paths_per_root,
               std::optional<std::size_t> max_live_states,
               bool allow_non_unitary, nanobind::args runtimeArgs) {
   if (shots_count == 0)
@@ -61,8 +59,6 @@ pySamplePTSBE(const std::string &shortName, MlirModule module,
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
   ptsbe_options.max_shots_per_path = max_shots_per_path;
-  ptsbe_options.num_root_draws = num_root_draws;
-  ptsbe_options.max_paths_per_root = max_paths_per_root;
   ptsbe_options.max_live_states = max_live_states;
   ptsbe_options.allow_non_unitary = allow_non_unitary;
 
@@ -129,8 +125,6 @@ pySampleAsyncPTSBE(const std::string &shortName, MlirModule module,
                    std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
                    bool return_execution_data, bool include_sequential_data,
                    std::optional<std::size_t> max_shots_per_path,
-                   std::optional<std::size_t> num_root_draws,
-                   std::optional<std::size_t> max_paths_per_root,
                    std::optional<std::size_t> max_live_states,
                    bool allow_non_unitary, nanobind::args runtimeArgs) {
 
@@ -139,8 +133,6 @@ pySampleAsyncPTSBE(const std::string &shortName, MlirModule module,
   ptsbe_options.include_sequential_data = include_sequential_data;
   ptsbe_options.max_trajectories = max_trajectories;
   ptsbe_options.max_shots_per_path = max_shots_per_path;
-  ptsbe_options.num_root_draws = num_root_draws;
-  ptsbe_options.max_paths_per_root = max_paths_per_root;
   ptsbe_options.max_live_states = max_live_states;
   ptsbe_options.allow_non_unitary = allow_non_unitary;
 
@@ -290,19 +282,6 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
                        return nanobind::none();
                      return nanobind::cast(*self.channel);
                    })
-      .def_prop_ro(
-          "record_index",
-          [](const ptsbe::TraceInstruction &self) { return self.record_index; },
-          "Position of this instruction's bit in the per-shot measurement "
-          "record. Set for Measurement and MeasureReset instructions, None "
-          "otherwise.")
-      .def_prop_ro(
-          "register_name",
-          [](const ptsbe::TraceInstruction &self) {
-            return self.register_name;
-          },
-          "Measurement register name from the kernel, or None for unnamed "
-          "measurements and non-measurement instructions.")
       .def("__repr__", [](const ptsbe::TraceInstruction &self) {
         return "TraceInstruction(" + self.name + " on " +
                std::to_string(self.targets.size()) + " qubits)";
@@ -489,8 +468,6 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
             nanobind::arg("return_execution_data"),
             nanobind::arg("include_sequential_data"),
             nanobind::arg("max_shots_per_path").none(),
-            nanobind::arg("num_root_draws").none(),
-            nanobind::arg("max_paths_per_root").none(),
             nanobind::arg("max_live_states").none(),
             nanobind::arg("allow_non_unitary"), nanobind::arg("arguments"),
             R"pbdoc(
@@ -510,13 +487,9 @@ Args:
     full records instead of a per-shot list.
   max_shots_per_path: Maximum shots sharing one replay of a trajectory
     (one replay path). None selects
-    automatically (1 with mid-circuit measurement or reset or when any
-    frontier knob is set, unlimited otherwise); 0 forces unlimited. The
+    automatically (1 with mid-circuit measurement or reset or when
+    max_live_states is set, unlimited otherwise); 0 forces unlimited. The
     environment variable CUDAQ_PTSBE_MAX_SHOTS_PER_PATH takes precedence.
-  num_root_draws: Fixed number of independent root draws performed before
-    deduplication, or None for strategy-controlled budgeting.
-  max_paths_per_root: Maximum replay paths sampled for one root, or None
-    for unbounded. Configurations requiring more paths are errors.
   max_live_states: Requested live frontier width per path group of the
     branching frontier executor; the resident allocation rounds up to the
     next power of two. None lets the executor pick a width automatically,
@@ -541,8 +514,6 @@ Returns:
             nanobind::arg("return_execution_data"),
             nanobind::arg("include_sequential_data"),
             nanobind::arg("max_shots_per_path").none(),
-            nanobind::arg("num_root_draws").none(),
-            nanobind::arg("max_paths_per_root").none(),
             nanobind::arg("max_live_states").none(),
             nanobind::arg("allow_non_unitary"), nanobind::arg("arguments"),
             "Run PTSBE sampling asynchronously. Returns an "

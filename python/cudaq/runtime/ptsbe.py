@@ -22,8 +22,6 @@ def _validate_ptsbe_args(kernel,
                          noise_model,
                          max_trajectories,
                          max_shots_per_path,
-                         num_root_draws=None,
-                         max_paths_per_root=None,
                          max_live_states=None,
                          allow_non_unitary=False,
                          include_sequential_data=False):
@@ -64,9 +62,7 @@ def _validate_ptsbe_args(kernel,
                 "Invalid `max_shots_per_path`. Must be a non-negative "
                 "integer.")
 
-    for name, value in (("num_root_draws", num_root_draws),
-                        ("max_paths_per_root", max_paths_per_root),
-                        ("max_live_states", max_live_states)):
+    for name, value in (("max_live_states", max_live_states),):
         if value is not None:
             if (not _is_int(value)) or (value < 1):
                 raise RuntimeError("Invalid `" + name +
@@ -93,8 +89,6 @@ def sample(kernel,
            return_execution_data=False,
            include_sequential_data=False,
            max_shots_per_path=None,
-           num_root_draws=None,
-           max_paths_per_root=None,
            max_live_states=None,
            allow_non_unitary=False):
     """
@@ -135,19 +129,10 @@ def sample(kernel,
       max_shots_per_path (int or ``None``): Maximum shots sharing one replay
           of a trajectory (one replay path). ``None`` (default) selects
           automatically: 1 when the kernel
-          contains mid-circuit measurement or reset or when any frontier
-          knob (``num_root_draws``, ``max_paths_per_root``,
-          ``max_live_states``) is set, unlimited otherwise. 0 forces
+          contains mid-circuit measurement or reset or when
+          ``max_live_states`` is set, unlimited otherwise. 0 forces
           unlimited. The environment variable
           ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.
-      num_root_draws (int or ``None``): Fixed number of independent root
-          draws performed before deduplication. Shot allocation becomes the
-          exact root-weight split; configurations that cannot satisfy the
-          flat-result integer conditions raise errors rather than being
-          silently adjusted. ``None`` keeps strategy-controlled budgeting.
-      max_paths_per_root (int or ``None``): Maximum replay paths sampled for
-          one root. Configurations requiring more paths raise errors.
-          ``None`` means unbounded.
       max_live_states (int or ``None``): Requested live frontier width, the
           maximum number of statevectors that stay live in one path group of
           the branching frontier executor. The resident allocation rounds this
@@ -182,7 +167,6 @@ def sample(kernel,
     """
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
                                      max_trajectories, max_shots_per_path,
-                                     num_root_draws, max_paths_per_root,
                                      max_live_states, allow_non_unitary,
                                      include_sequential_data)
 
@@ -199,8 +183,8 @@ def sample(kernel,
                 decorator.uniqName, module, compiled, shots_count, noise_model,
                 max_trajectories, sampling_strategy, shot_allocation,
                 return_execution_data, include_sequential_data,
-                max_shots_per_path, num_root_draws, max_paths_per_root,
-                max_live_states, allow_non_unitary, *processedArgs)
+                max_shots_per_path, max_live_states, allow_non_unitary,
+                *processedArgs)
             results.append(result)
         return results
 
@@ -210,8 +194,7 @@ def sample(kernel,
         decorator.uniqName, module, compiled, shots_count, noise_model,
         max_trajectories, sampling_strategy, shot_allocation,
         return_execution_data, include_sequential_data, max_shots_per_path,
-        num_root_draws, max_paths_per_root, max_live_states, allow_non_unitary,
-        *processedArgs)
+        max_live_states, allow_non_unitary, *processedArgs)
 
 
 @trace.traced
@@ -225,8 +208,6 @@ def sample_async(kernel,
                  return_execution_data=False,
                  include_sequential_data=False,
                  max_shots_per_path=None,
-                 num_root_draws=None,
-                 max_paths_per_root=None,
                  max_live_states=None,
                  allow_non_unitary=False):
     """
@@ -252,10 +233,6 @@ def sample_async(kernel,
           of a trajectory (one replay path).
           ``None`` selects automatically; 0 forces unlimited. The environment
           variable ``CUDAQ_PTSBE_MAX_SHOTS_PER_PATH`` takes precedence.
-      num_root_draws (int or ``None``): Fixed number of independent root
-          draws before deduplication; see ``sample``.
-      max_paths_per_root (int or ``None``): Maximum replay paths per root;
-          see ``sample``.
       max_live_states (int or ``None``): Requested live frontier width per
           path group; ``None`` lets the executor pick automatically, including
           for non-unitary channels. See ``sample``.
@@ -272,7 +249,6 @@ def sample_async(kernel,
     """
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
                                      max_trajectories, max_shots_per_path,
-                                     num_root_draws, max_paths_per_root,
                                      max_live_states, allow_non_unitary,
                                      include_sequential_data)
 
@@ -284,7 +260,7 @@ def sample_async(kernel,
     impl = cudaq_runtime.ptsbe.sample_async_impl(
         decorator.uniqName, module, shots_count, noise_model, max_trajectories,
         sampling_strategy, shot_allocation, return_execution_data,
-        include_sequential_data, max_shots_per_path, num_root_draws,
-        max_paths_per_root, max_live_states, allow_non_unitary, *processedArgs)
+        include_sequential_data, max_shots_per_path, max_live_states,
+        allow_non_unitary, *processedArgs)
 
     return AsyncSampleResult(impl, module)

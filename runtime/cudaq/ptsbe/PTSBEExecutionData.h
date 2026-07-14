@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -111,6 +112,23 @@ std::size_t countInstructions(std::span<const TraceInstruction> trace,
 /// traces execute on the terminal-sampling path (which samples MeasureReset
 /// qubits alongside plain Measurement qubits).
 bool hasMidCircuitMeasurement(std::span<const TraceInstruction> trace);
+
+/// @brief Facts derived once from a PTSBE trace, single-sourcing the record
+/// width, the mid-circuit-measurement flag, and the per-qubit last-touch index
+/// that record-layout construction and executor setup would otherwise each
+/// re-derive with their own trace scan.
+///
+/// `lastTouchIndex` maps a qubit id to the index of the last instruction whose
+/// targets or controls touch it; a measuring or reset site at index i is
+/// mid-circuit exactly when one of its targets is touched later.
+struct TraceLayout {
+  bool hasMidCircuitMeasurement = false;
+  std::size_t numRecordBits = 0;
+  std::unordered_map<std::size_t, std::size_t> lastTouchIndex;
+};
+
+/// @brief Compute the trace layout in a single forward-then-site pass.
+TraceLayout computeTraceLayout(std::span<const TraceInstruction> trace);
 
 /// @brief Container for PTSBE execution data including circuit structure,
 /// trajectory specifications, and per-trajectory measurement outcomes.

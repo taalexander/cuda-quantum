@@ -20,6 +20,8 @@
 #include <vector>
 
 using namespace cudaq::ptsbe;
+using cudaq::ptsbe::detail::mergeSitesWithTrajectory;
+using cudaq::ptsbe::detail::ReplayOpKind;
 
 namespace {
 
@@ -61,91 +63,34 @@ cudaq::noise_model amplitudeDampingOnH(double gamma = 0.2) {
   return noise;
 }
 
-/// Deterministic strategy for allocation tests: one trajectory per requested
-/// multiplicity, each selecting a distinct Kraus index at every noise site.
-class FixedRootStrategy : public PTSSamplingStrategy {
-public:
-  explicit FixedRootStrategy(std::vector<std::size_t> multiplicities)
-      : multiplicities_(std::move(multiplicities)) {}
-
-  [[nodiscard]] std::vector<cudaq::KrausTrajectory>
-  generateTrajectories(std::span<const detail::NoisePoint> noise_points,
-                       std::size_t /*max_trajectories*/) const override {
-    std::vector<cudaq::KrausTrajectory> result;
-    for (std::size_t i = 0; i < multiplicities_.size(); ++i) {
-      std::vector<cudaq::KrausSelection> selections;
-      for (const auto &np : noise_points) {
-        auto idx = i % np.channel.size();
-        selections.push_back(
-            {np.circuit_location, np.qubits, np.op_name, idx, idx != 0});
-      }
-      cudaq::KrausTrajectory traj(i, std::move(selections),
-                                  1.0 / multiplicities_.size());
-      traj.multiplicity = multiplicities_[i];
-      traj.weight = static_cast<double>(multiplicities_[i]);
-      result.push_back(std::move(traj));
-    }
-    return result;
-  }
-
-  [[nodiscard]] const char *name() const override { return "FixedRoot"; }
-
-  [[nodiscard]] std::unique_ptr<PTSSamplingStrategy> clone() const override {
-    return std::make_unique<FixedRootStrategy>(*this);
-  }
-
-private:
-  std::vector<std::size_t> multiplicities_;
-};
-
 } // namespace
 
 TEST(FrontierConfigTest, OptionsDefaultsUnset) {
   PTSBEOptions options;
-  EXPECT_FALSE(options.num_root_draws.has_value());
-  EXPECT_FALSE(options.max_paths_per_root.has_value());
   EXPECT_FALSE(options.max_live_states.has_value());
   EXPECT_FALSE(options.allow_non_unitary);
-}
-
-TEST(FrontierConfigTest, BatchCarriesKnobsAndDefaultsToOneShotPerPath) {
-  PTSBEOptions options;
-  options.num_root_draws = 1;
-  options.max_paths_per_root = 8;
-  options.max_live_states = 4;
-
-  auto batch = buildBatch(cudaq::noise_model{}, options, 4);
-
-  ASSERT_TRUE(batch.numRootDraws.has_value());
-  EXPECT_EQ(*batch.numRootDraws, 1);
-  ASSERT_TRUE(batch.maxPathsPerRoot.has_value());
-  EXPECT_EQ(*batch.maxPathsPerRoot, 8);
-  ASSERT_TRUE(batch.maxLiveStates.has_value());
-  EXPECT_EQ(*batch.maxLiveStates, 4);
-  // Default configuration is one terminal sample per path (T=1), so
-  // C_u = N_u.
-  EXPECT_EQ(batch.maxShotsPerPath, 1);
-  ASSERT_EQ(batch.trajectories.size(), 1);
-  EXPECT_EQ(batch.trajectories[0].num_shots, 4);
 }
 
 TEST(FrontierConfigTest, KnobsUnsetKeepTerminalBehavior) {
   auto batch = buildBatch(cudaq::noise_model{}, PTSBEOptions{}, 100);
 
-  EXPECT_FALSE(batch.numRootDraws.has_value());
-  EXPECT_FALSE(batch.maxPathsPerRoot.has_value());
   EXPECT_FALSE(batch.maxLiveStates.has_value());
   EXPECT_EQ(batch.maxShotsPerPath, 0);
 }
 
-TEST(FrontierConfigTest, RequiredPathsExceedingMaxPathsPerRootErrors) {
+TEST(FrontierConfigTest, MaxLiveStatesDefaultsToOneShotPerPath) {
   PTSBEOptions options;
-  options.max_paths_per_root = 10;
+  options.max_live_states = 4;
 
-  // Default T=1 makes C_u = N_u = 100 > 10. Errors, no silent clamping.
-  expectThrowContains<std::invalid_argument>(
-      [&]() { buildBatch(cudaq::noise_model{}, options, 100); },
-      "max_paths_per_root");
+  auto batch = buildBatch(cudaq::noise_model{}, options, 4);
+
+  ASSERT_TRUE(batch.maxLiveStates.has_value());
+  EXPECT_EQ(*batch.maxLiveStates, 4);
+  // A set frontier width engages frontier configuration, whose default is one
+  // terminal sample per path (T=1), so C_u = N_u.
+  EXPECT_EQ(batch.maxShotsPerPath, 1);
+  ASSERT_EQ(batch.trajectories.size(), 1);
+  EXPECT_EQ(batch.trajectories[0].num_shots, 4);
 }
 
 TEST(FrontierConfigTest, NonIntegerTerminalSamplesPerPathError) {
@@ -160,37 +105,23 @@ TEST(FrontierConfigTest, NonIntegerTerminalSamplesPerPathError) {
 
 TEST(FrontierConfigTest, ValidConfigurationIsNotClamped) {
   PTSBEOptions options;
-  options.max_paths_per_root = 3;
+  options.max_live_states = 3;
   options.max_shots_per_path = 2;
 
   // N_u = 6, C_u = 3, T_u = 2: valid, values pass through unchanged.
   auto batch = buildBatch(cudaq::noise_model{}, options, 6);
   EXPECT_EQ(batch.maxShotsPerPath, 2);
-  ASSERT_TRUE(batch.maxPathsPerRoot.has_value());
-  EXPECT_EQ(*batch.maxPathsPerRoot, 3);
+  ASSERT_TRUE(batch.maxLiveStates.has_value());
+  EXPECT_EQ(*batch.maxLiveStates, 3);
   ASSERT_EQ(batch.trajectories.size(), 1);
   EXPECT_EQ(batch.trajectories[0].num_shots, 6);
 }
 
-TEST(FrontierConfigTest, ZeroFrontierKnobsRejected) {
-  {
-    PTSBEOptions options;
-    options.max_live_states = 0;
-    expectThrowContains<std::invalid_argument>(
-        [&]() { buildBatch(cudaq::noise_model{}, options, 4); }, "positive");
-  }
-  {
-    PTSBEOptions options;
-    options.num_root_draws = 0;
-    expectThrowContains<std::invalid_argument>(
-        [&]() { buildBatch(cudaq::noise_model{}, options, 4); }, "positive");
-  }
-  {
-    PTSBEOptions options;
-    options.max_paths_per_root = 0;
-    expectThrowContains<std::invalid_argument>(
-        [&]() { buildBatch(cudaq::noise_model{}, options, 4); }, "positive");
-  }
+TEST(FrontierConfigTest, ZeroFrontierWidthRejected) {
+  PTSBEOptions options;
+  options.max_live_states = 0;
+  expectThrowContains<std::invalid_argument>(
+      [&]() { buildBatch(cudaq::noise_model{}, options, 4); }, "positive");
 }
 
 TEST(FrontierConfigTest, FixedDrawsPreserveDrawTotal) {
@@ -236,93 +167,23 @@ TEST(FrontierConfigTest, FixedDrawsConflictWithSampleBudget) {
       "num_root_draws");
 }
 
-TEST(FrontierConfigTest, RootMultiplicityAllocationIsExact) {
-  PTSBEOptions options;
-  options.strategy =
-      std::make_shared<FixedRootStrategy>(std::vector<std::size_t>{3, 1});
-  options.num_root_draws = 4;
+TEST(FrontierConfigTest, NoiseFreeTraceRunsOneIdentityRoot) {
+  auto batch = buildBatch(cudaq::noise_model{}, PTSBEOptions{}, 8);
 
-  // N_u = shots * d_u / D exactly: 8 * 3/4 = 6 and 8 * 1/4 = 2.
-  auto batch = buildBatch(bitFlipOnH(), options, 8);
-  ASSERT_EQ(batch.trajectories.size(), 2);
-  EXPECT_EQ(batch.trajectories[0].num_shots, 6);
-  EXPECT_EQ(batch.trajectories[1].num_shots, 2);
-}
-
-TEST(FrontierConfigTest, RootMultiplicityAllocationNonIntegerErrors) {
-  PTSBEOptions options;
-  options.strategy =
-      std::make_shared<FixedRootStrategy>(std::vector<std::size_t>{3, 1});
-  options.num_root_draws = 4;
-
-  // 5 * 3/4 is not an integer, so flat counts cannot preserve outer-root
-  // weight.
-  expectThrowContains<std::invalid_argument>(
-      [&]() { buildBatch(bitFlipOnH(), options, 5); }, "outer-root");
-}
-
-TEST(FrontierConfigTest, MismatchedDrawTotalErrors) {
-  PTSBEOptions options;
-  options.strategy =
-      std::make_shared<FixedRootStrategy>(std::vector<std::size_t>{3, 1});
-  options.num_root_draws = 5;
-
-  // Strategy produced sum(d_u) = 4 != D = 5.
-  expectThrowContains<std::invalid_argument>(
-      [&]() { buildBatch(bitFlipOnH(), options, 10); }, "num_root_draws");
-}
-
-TEST(FrontierConfigTest, UniformAllocationViolatingRootWeightErrors) {
-  PTSBEOptions options;
-  options.strategy =
-      std::make_shared<FixedRootStrategy>(std::vector<std::size_t>{3, 1});
-  options.num_root_draws = 4;
-  options.shot_allocation =
-      ShotAllocationStrategy(ShotAllocationStrategy::Type::UNIFORM);
-
-  // UNIFORM gives (4, 4); flat counts require N_u/total = d_u/D = (3/4, 1/4).
-  expectThrowContains<std::invalid_argument>(
-      [&]() { buildBatch(bitFlipOnH(), options, 8); }, "outer-root");
-}
-
-TEST(FrontierConfigTest, ZeroShotRootWithRootDrawsErrors) {
-  PTSBEOptions options;
-  options.strategy =
-      std::make_shared<FixedRootStrategy>(std::vector<std::size_t>{1, 3});
-  options.num_root_draws = 4;
-  options.shot_allocation =
-      ShotAllocationStrategy(ShotAllocationStrategy::Type::UNIFORM);
-
-  // UNIFORM with one shot gives (1, 0): the second root has d_u = 3 but
-  // N_u = 0, so flat counts cannot preserve N_u/total = d_u/D. Zero-shot
-  // roots must not slip past the root-weight validation.
-  expectThrowContains<std::invalid_argument>(
-      [&]() { buildBatch(bitFlipOnH(), options, 1); }, "outer-root");
-}
-
-TEST(FrontierConfigTest, IdentityRootAbsorbsAllRootDraws) {
-  PTSBEOptions options;
-  options.num_root_draws = 4;
-
-  // D IID draws of a circuit with no pre-sampled sites are one identity root
-  // with outer multiplicity D, probability 1, and the full shot allocation.
-  auto batch = buildBatch(cudaq::noise_model{}, options, 8);
   ASSERT_EQ(batch.trajectories.size(), 1);
-  EXPECT_EQ(batch.trajectories[0].multiplicity, 4);
+  EXPECT_EQ(batch.trajectories[0].multiplicity, 1);
   EXPECT_DOUBLE_EQ(batch.trajectories[0].probability, 1.0);
   EXPECT_EQ(batch.trajectories[0].num_shots, 8);
 }
 
-TEST(FrontierConfigTest, NonUnitaryOnlyWorkloadAcceptsMultipleRootDraws) {
+TEST(FrontierConfigTest, NonUnitaryOnlyWorkloadRunsOneIdentityRoot) {
   PTSBEOptions options;
   options.allow_non_unitary = true;
-  options.num_root_draws = 4;
 
   // The pure non-unitary workload has zero pre-sampled sites: every branch
-  // is selected during replay, so the identity root carries all D draws.
+  // is selected during replay, so a single identity root carries the shots.
   auto batch = buildBatch(amplitudeDampingOnH(), options, 8);
   ASSERT_EQ(batch.trajectories.size(), 1);
-  EXPECT_EQ(batch.trajectories[0].multiplicity, 4);
   EXPECT_TRUE(batch.trajectories[0].kraus_selections.empty());
   EXPECT_EQ(batch.trajectories[0].num_shots, 8);
 }

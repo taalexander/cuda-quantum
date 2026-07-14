@@ -47,31 +47,11 @@ struct PTSBEOptions {
   /// Capping the path size splits a trajectory's shots across independent
   /// replay paths so their measurement records stay decorrelated. When
   /// `nullopt` (default), selected automatically: 1 when
-  /// the trace contains mid-circuit measurement or reset or when any
-  /// frontier knob (num_root_draws, max_paths_per_root, max_live_states) is
-  /// set, unlimited otherwise. An explicit 0 forces unlimited. The
-  /// environment variable
+  /// the trace contains mid-circuit measurement or reset or when
+  /// max_live_states is set, unlimited otherwise. An explicit 0 forces
+  /// unlimited. The environment variable
   /// `CUDAQ_PTSBE_MAX_SHOTS_PER_PATH` takes precedence over this option.
   std::optional<std::size_t> max_shots_per_path = std::nullopt;
-
-  /// Fixed number D of independent root draws performed before
-  /// deduplication. When set, the default probabilistic strategy performs
-  /// exactly D draws (discovering more than max_trajectories unique roots is
-  /// an error, not a stopping rule), the sum of root multiplicities must
-  /// equal D, and PROPORTIONAL shot allocation is the exact root-weight
-  /// split N_u = shots * d_u / D. Flat results require N_u / total = d_u / D
-  /// exactly; proportional allocation errors when shots * d_u is not divisible
-  /// by D for a root. Violations are errors, never silently adjusted. When
-  /// `nullopt`, root
-  /// draws follow the strategy's own budgeting and no root-weight conditions
-  /// are enforced.
-  std::optional<std::size_t> num_root_draws = std::nullopt;
-
-  /// Maximum replay paths sampled for one root. The required path count is
-  /// C_u = ceil(N_u / max_shots_per_path); a configuration whose required
-  /// C_u exceeds this limit is an error (no silent clamping). When `nullopt`,
-  /// the path count per root is unbounded.
-  std::optional<std::size_t> max_paths_per_root = std::nullopt;
 
   /// Requested live frontier width: the maximum number of statevectors that
   /// stay live in one path group of the branching frontier executor.

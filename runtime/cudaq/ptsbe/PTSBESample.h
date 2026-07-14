@@ -245,10 +245,9 @@ sample_result runSamplingPTSBE(KernelFunctor &&wrappedKernel,
   // Stage 4: Execute PTSBE with life-cycle management
   auto perTrajectoryResults = samplePTSBEWithLifecycle(batch);
 
-  // Stage 5: Aggregate per-trajectory results. Flat pooling equals the
-  // root-weighted estimator f_hat = sum_u(d_u * fbar_u) / D whenever
-  // num_root_draws is set, because validateFrontierAllocation enforces
-  // N_u / total = d_u / D exactly.
+  // Stage 5: Aggregate per-trajectory results. Flat pooling over per-shot
+  // outcomes is the unbiased estimator for the uniform default allocation,
+  // where every root carries multiplicity 1.
   sample_result result(aggregateResults(perTrajectoryResults));
   result.set_record_layout(std::move(recordLayout));
 

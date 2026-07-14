@@ -48,16 +48,6 @@ struct PTSBatch {
   /// PTSBEOptions::max_shots_per_path).
   std::size_t maxShotsPerPath = 0;
 
-  /// @brief Fixed number D of independent root draws represented by the
-  /// deduplicated trajectories (sum of multiplicities equals D). Unset when
-  /// the batch was built without PTSBEOptions::num_root_draws.
-  std::optional<std::size_t> numRootDraws = std::nullopt;
-
-  /// @brief Maximum replay paths sampled for one root
-  /// (PTSBEOptions::max_paths_per_root). Validated at batch construction;
-  /// unset means unbounded.
-  std::optional<std::size_t> maxPathsPerRoot = std::nullopt;
-
   /// @brief Maximum statevectors resident in one path group of the branching
   /// frontier executor (PTSBEOptions::max_live_states). Unset lets the
   /// executor choose its capacity.
@@ -79,11 +69,10 @@ namespace cudaq::ptsbe::detail {
 
 /// @brief Aggregate per-trajectory sample results into a single result.
 ///
-/// Flat pooling is also the physical root-weighted estimator
-/// f_hat = sum_u(d_u * fbar_u) / D whenever num_root_draws is set, because
-/// validateFrontierAllocation enforces N_u / total = d_u / D exactly. An
-/// unequal-allocation mode would need an explicit root-weighted aggregation
-/// before flat pooling and f_hat could diverge.
+/// Flat pooling over per-shot outcomes is the unbiased estimator for the
+/// uniform default allocation, where every root carries multiplicity 1. A
+/// future unequal-allocation mode would need explicit root-weighted
+/// aggregation before flat pooling, or the estimate could diverge.
 cudaq::sample_result
 aggregateResults(const std::vector<cudaq::sample_result> &results);
 

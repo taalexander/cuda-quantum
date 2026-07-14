@@ -64,15 +64,9 @@ void validatePTSBEPreconditions(quantum_platform &platform,
 
 std::vector<RecordSite>
 buildRecordLayout(std::span<const TraceInstruction> trace) {
-  // Index of the last instruction touching each qubit, so the terminal flag
-  // is an O(1) lookup per site instead of a forward scan per site.
-  std::unordered_map<std::size_t, std::size_t> lastTouch;
-  for (std::size_t i = 0; i < trace.size(); ++i) {
-    for (auto q : trace[i].targets)
-      lastTouch[q] = i;
-    for (auto q : trace[i].controls)
-      lastTouch[q] = i;
-  }
+  // Reuse the shared last-touch scan so the terminal flag is an O(1) lookup
+  // per site and stays consistent with hasMidCircuitMeasurement.
+  const auto lastTouch = computeTraceLayout(trace).lastTouchIndex;
 
   std::vector<RecordSite> layout;
   for (std::size_t i = 0; i < trace.size(); ++i) {
@@ -90,8 +84,8 @@ buildRecordLayout(std::span<const TraceInstruction> trace) {
     const bool resets = inst.type == TraceInstructionType::MeasureReset;
     for (std::size_t k = 0; k < inst.targets.size(); ++k) {
       const auto qubit = inst.targets[k];
-      layout.push_back(
-          {base + k, qubit, resets, lastTouch[qubit] == i, inst.register_name});
+      layout.push_back({base + k, qubit, resets, lastTouch.at(qubit) == i,
+                        inst.register_name});
     }
   }
   return layout;
@@ -328,86 +322,32 @@ static std::optional<std::size_t> maxShotsPerPathEnvOverride() {
   return static_cast<std::size_t>(parsed);
 }
 
-/// Frontier configuration is engaged when any of the three sampled-history
-/// knobs is set. Set knobs must be positive; no silent clamping anywhere.
-static bool frontierConfigured(const PTSBEOptions &options) {
-  const bool configured = options.num_root_draws ||
-                          options.max_paths_per_root || options.max_live_states;
-  if (!configured)
+/// Frontier configuration is engaged when the live-frontier width is set. A
+/// set width must be positive; no silent clamping anywhere.
+static bool frontierConfigured(std::optional<std::size_t> maxLiveStates) {
+  if (!maxLiveStates)
     return false;
-  auto requirePositive = [](const std::optional<std::size_t> &knob,
-                            const char *name) {
-    if (knob && *knob == 0)
-      throw std::invalid_argument(
-          "PTSBE frontier configuration: " + std::string(name) +
-          " must be a positive integer.");
-  };
-  requirePositive(options.num_root_draws, "num_root_draws");
-  requirePositive(options.max_paths_per_root, "max_paths_per_root");
-  requirePositive(options.max_live_states, "max_live_states");
+  if (*maxLiveStates == 0)
+    throw std::invalid_argument("PTSBE frontier configuration: max_live_states "
+                                "must be a positive integer.");
   return true;
 }
 
-/// Exact root-weight allocation for fixed root draws: N_u = shots * d_u / D.
-/// Flat results require this to be an exact integer split; a remainder means
-/// flat counts cannot preserve the outer-root weights d_u/D, which is an
-/// error rather than a rounding adjustment.
-static void
-allocateShotsByRootMultiplicity(std::span<cudaq::KrausTrajectory> trajectories,
-                                std::size_t shots, std::size_t numRootDraws) {
-  for (auto &traj : trajectories) {
-    const std::size_t weighted = shots * traj.multiplicity;
-    if (weighted % numRootDraws != 0)
-      throw std::invalid_argument(
-          "PTSBE frontier configuration: flat counts cannot preserve "
-          "outer-root weight: shots (" +
-          std::to_string(shots) + ") * multiplicity (" +
-          std::to_string(traj.multiplicity) +
-          ") is not divisible by num_root_draws (" +
-          std::to_string(numRootDraws) + ").");
-    traj.num_shots = weighted / numRootDraws;
-  }
-}
-
-/// Validate the sampled-history integer-allocation conditions from the
-/// dynamic-branching design: per root u with N_u allocated shots,
-///   C_u = ceil(N_u / max_shots_per_path) must not exceed max_paths_per_root,
+/// Validate the equal-terminal-samples-per-path condition for a configured
+/// frontier: per root u with N_u allocated shots,
+///   C_u = ceil(N_u / max_shots_per_path) replay paths, and
 ///   N_u = C_u * T_u must hold with integer T_u (equal terminal samples per
-///   path), and with fixed root draws N_u / total must equal d_u / D.
-/// Violations are errors; the runtime never adjusts a limit or reallocates.
+///   path).
+/// A remainder is an error; the runtime never adjusts a limit or reallocates.
 static void validateFrontierAllocation(const PTSBatch &batch) {
-  const std::size_t totalShots = batch.totalShots();
   for (const auto &traj : batch.trajectories) {
     const std::size_t pathShots = traj.num_shots;
-    // The root-weight check runs before the zero-shot skip: a root with
-    // d_u > 0 and N_u = 0 violates N_u / total = d_u / D and must error
-    // rather than pass by omission.
-    if (batch.numRootDraws &&
-        pathShots * *batch.numRootDraws != traj.multiplicity * totalShots)
-      throw std::invalid_argument(
-          "PTSBE frontier configuration: root " +
-          std::to_string(traj.trajectory_id) + " received " +
-          std::to_string(pathShots) + " of " + std::to_string(totalShots) +
-          " shots, which does not preserve its outer-root weight " +
-          std::to_string(traj.multiplicity) + "/" +
-          std::to_string(*batch.numRootDraws) +
-          ". Flat results require N_u / total = d_u / num_root_draws.");
     if (pathShots == 0)
       continue;
     const std::size_t requiredPaths =
         batch.maxShotsPerPath == 0
             ? 1
             : (pathShots + batch.maxShotsPerPath - 1) / batch.maxShotsPerPath;
-    if (batch.maxPathsPerRoot && requiredPaths > *batch.maxPathsPerRoot)
-      throw std::invalid_argument(
-          "PTSBE frontier configuration: root " +
-          std::to_string(traj.trajectory_id) + " requires " +
-          std::to_string(requiredPaths) +
-          " replay paths (ceil(N_u / max_shots_per_path) with N_u = " +
-          std::to_string(pathShots) + "), exceeding max_paths_per_root (" +
-          std::to_string(*batch.maxPathsPerRoot) +
-          "). Limits are never clamped; raise max_paths_per_root or lower "
-          "the allocation.");
     if (pathShots % requiredPaths != 0)
       throw std::invalid_argument(
           "PTSBE frontier configuration: root " +
@@ -423,9 +363,7 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
                                 std::size_t shots) {
   PTSBatch batch;
 
-  const bool frontier = frontierConfigured(options);
-  batch.numRootDraws = options.num_root_draws;
-  batch.maxPathsPerRoot = options.max_paths_per_root;
+  const bool frontier = frontierConfigured(options.max_live_states);
   batch.maxLiveStates = options.max_live_states;
 
   batch.trace = std::move(trace);
@@ -461,8 +399,7 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 
   auto strategy = options.strategy
                       ? options.strategy
-                      : std::make_shared<ProbabilisticSamplingStrategy>(
-                            std::nullopt, std::nullopt, options.num_root_draws);
+                      : std::make_shared<ProbabilisticSamplingStrategy>();
   std::size_t maxTrajs = options.max_trajectories.value_or(shots);
   cudaq::info("[ptsbe] Generating trajectories via {} strategy (max {})",
               strategy->name(), maxTrajs);
@@ -470,38 +407,14 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 
   // A noise-free trace has no pre-sampled noise sites, so strategies produce
   // no trajectories. Execute it as one identity trajectory (probability 1,
-  // no Kraus selections) so sampling and per-shot records still run. All D
-  // fixed root draws of the empty root are that one root, so it carries the
-  // full outer multiplicity.
-  if (batch.trajectories.empty() && sampledSites.empty() && shots > 0) {
+  // no Kraus selections, multiplicity 1) so sampling and per-shot records
+  // still run.
+  if (batch.trajectories.empty() && sampledSites.empty() && shots > 0)
     batch.trajectories.push_back(
         KrausTrajectory::builder().setId(0).setProbability(1.0).build());
-    batch.trajectories.back().multiplicity = options.num_root_draws.value_or(1);
-  }
 
-  if (batch.numRootDraws) {
-    std::size_t drawTotal = 0;
-    for (const auto &traj : batch.trajectories)
-      drawTotal += traj.multiplicity;
-    if (drawTotal != *batch.numRootDraws)
-      throw std::invalid_argument(
-          "PTSBE frontier configuration: root multiplicities sum to " +
-          std::to_string(drawTotal) + " but num_root_draws is " +
-          std::to_string(*batch.numRootDraws) +
-          "; every fixed root draw must be represented exactly once.");
-  }
-
-  if (!batch.trajectories.empty() && shots > 0) {
-    // With fixed root draws, PROPORTIONAL allocation is the exact
-    // root-weight split; other allocation types run unchanged and must then
-    // satisfy the flat-result root-weight condition below.
-    if (batch.numRootDraws && options.shot_allocation.type ==
-                                  ShotAllocationStrategy::Type::PROPORTIONAL)
-      allocateShotsByRootMultiplicity(batch.trajectories, shots,
-                                      *batch.numRootDraws);
-    else
-      allocateShots(batch.trajectories, shots, options.shot_allocation);
-  }
+  if (!batch.trajectories.empty() && shots > 0)
+    allocateShots(batch.trajectories, shots, options.shot_allocation);
 
   if (frontier)
     validateFrontierAllocation(batch);

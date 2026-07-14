@@ -23,13 +23,13 @@ namespace {
 // returned pointers are used; the pointers stay valid across the move
 // because they point into heap storage.
 struct MergedGates {
-  std::vector<ptsbe::GateTask<double>> gateCache;
-  ptsbe::TrajectoryReplay<double> replay;
-  std::vector<const ptsbe::GateTask<double> *> gates;
+  std::vector<ptsbe::detail::GateTask<double>> gateCache;
+  ptsbe::detail::TrajectoryReplay<double> replay;
+  std::vector<const ptsbe::detail::GateTask<double> *> gates;
 
   std::size_t size() const { return gates.size(); }
   bool empty() const { return gates.empty(); }
-  const ptsbe::GateTask<double> &operator[](std::size_t i) const {
+  const ptsbe::detail::GateTask<double> &operator[](std::size_t i) const {
     return *gates[i];
   }
 };
@@ -38,10 +38,10 @@ MergedGates mergeToGates(const std::vector<ptsbe::TraceInstruction> &ptsbeTrace,
                          const cudaq::KrausTrajectory &trajectory) {
   MergedGates merged;
   merged.gateCache = ptsbe::detail::convertTraceGates<double>(ptsbeTrace);
-  merged.replay = ptsbe::mergeSitesWithTrajectory<double>(
+  merged.replay = ptsbe::detail::mergeSitesWithTrajectory<double>(
       ptsbeTrace, merged.gateCache, trajectory);
   for (const auto &op : merged.replay.ops)
-    if (op.kind == ptsbe::ReplayOpKind::Gate)
+    if (op.kind == ptsbe::detail::ReplayOpKind::Gate)
       merged.gates.push_back(op.task);
   return merged;
 }
