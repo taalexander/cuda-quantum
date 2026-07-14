@@ -192,6 +192,7 @@ archiver
 arity
 auxillary
 backend
+backend's
 backends
 backpressure
 bernstein
@@ -220,6 +221,7 @@ comparator
 comparators
 composability
 composable
+const
 constructible
 controlled
 coprocessing
@@ -243,8 +245,10 @@ deallocates
 deallocation
 deallocations
 decomposer
+decorrelated
 decrement
 decrementing
+deduplicates
 dendrogram
 dependence
 dependences
@@ -337,6 +341,7 @@ nanobind
 natively
 normalization
 nullary
+nullopt
 nvcc
 nvq
 observables
@@ -399,6 +404,7 @@ splitter
 splitters
 sqale
 statevector
+statevectors
 struct
 structs
 subcircuit
