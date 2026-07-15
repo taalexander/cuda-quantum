@@ -65,9 +65,13 @@ CUDAQ_TEST(PTSBEPolicyTest, FinalizeWithoutBatchThrows) {
 }
 
 CUDAQ_TEST(PTSBEPolicyTest, ContextRestoredAfterFailure) {
+  // The invalid gate throws while the batch replays its gate cache. A terminal
+  // measurement keeps the batch past the no-output early return so replay runs
+  // and the failure surfaces inside the policy's execution context.
   ptsbe::PTSBatch badBatch;
   badBatch.trace = {
-      {ptsbe::TraceInstructionType::Gate, "not_a_gate", {0}, {}, {}}};
+      {ptsbe::TraceInstructionType::Gate, "not_a_gate", {0}, {}, {}},
+      {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}}};
   badBatch.trajectories.emplace_back(0, std::vector<cudaq::KrausSelection>{},
                                      1.0, 5);
 
