@@ -24,7 +24,6 @@ def _validate_ptsbe_args(kernel,
                          max_shots_per_path,
                          max_live_states=None,
                          allow_non_unitary=False,
-                         unitary_noise_as_branch=False,
                          include_sequential_data=False):
     """Validate arguments common to `sample` and `sample_async`."""
     decorator = kernel
@@ -70,7 +69,6 @@ def _validate_ptsbe_args(kernel,
                                    "`. Must be a positive integer.")
 
     for name, value in (("allow_non_unitary", allow_non_unitary),
-                        ("unitary_noise_as_branch", unitary_noise_as_branch),
                         ("include_sequential_data", include_sequential_data)):
         if not isinstance(value, bool):
             raise RuntimeError("Invalid `" + name + "`. Must be a bool.")
@@ -92,8 +90,7 @@ def sample(kernel,
            include_sequential_data=False,
            max_shots_per_path=None,
            max_live_states=None,
-           allow_non_unitary=False,
-           unitary_noise_as_branch=False):
+           allow_non_unitary=False):
     """
     Sample using Pre-Trajectory Sampling with Batch Execution (`PTSBE`).
 
@@ -150,15 +147,16 @@ def sample(kernel,
           batched simulator backend. With ``max_live_states`` unset the
           executor selects the frontier width automatically, so no capacity
           knob is required. Defaults to ``False``.
-      unitary_noise_as_branch (bool): Fold unitary-mixture (Pauli) noise into
-          the live branching frontier instead of pre-sampling it into flat
-          independent roots. Trajectories that agree early share their evolved
-          prefix. The ahead-of-time global dedup is preserved; this only
-          retains the shared-prefix structure the flat list discards. Requires
-          the single-process batched frontier executor (set ``max_live_states``
-          or leave it unset for auto-selection). Defaults to ``False``, in
-          which case unitary noise stays pre-sampled and results are
-          byte-identical to prior behavior.
+
+    Mode selection (internal and automatic):
+      There is one frontier executor. It folds unitary-mixture (Pauli) noise
+      into the live branching frontier and shares evolved prefixes only when
+      the kernel already forces per-prefix re-evolution (mid-circuit
+      measurement or admitted non-unitary Kraus) and ``max_live_states`` is
+      greater than 1. For terminal-only unitary noise and for the
+      ``max_live_states`` of 1 or large-state case it reduces to the flat
+      pre-sampled configuration, which is optimal there. There is no
+      user-facing tree-versus-flat choice.
 
     Returns:
       ``SampleResult``: Measurement results. Returns a list of results
@@ -180,7 +178,6 @@ def sample(kernel,
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
                                      max_trajectories, max_shots_per_path,
                                      max_live_states, allow_non_unitary,
-                                     unitary_noise_as_branch,
                                      include_sequential_data)
 
     if noise_model is None:
@@ -197,7 +194,7 @@ def sample(kernel,
                 max_trajectories, sampling_strategy, shot_allocation,
                 return_execution_data, include_sequential_data,
                 max_shots_per_path, max_live_states, allow_non_unitary,
-                unitary_noise_as_branch, *processedArgs)
+                *processedArgs)
             results.append(result)
         return results
 
@@ -207,8 +204,7 @@ def sample(kernel,
         decorator.uniqName, module, compiled, shots_count, noise_model,
         max_trajectories, sampling_strategy, shot_allocation,
         return_execution_data, include_sequential_data, max_shots_per_path,
-        max_live_states, allow_non_unitary, unitary_noise_as_branch,
-        *processedArgs)
+        max_live_states, allow_non_unitary, *processedArgs)
 
 
 @trace.traced
@@ -223,8 +219,7 @@ def sample_async(kernel,
                  include_sequential_data=False,
                  max_shots_per_path=None,
                  max_live_states=None,
-                 allow_non_unitary=False,
-                 unitary_noise_as_branch=False):
+                 allow_non_unitary=False):
     """
     Asynchronously sample using PTSBE. Returns a future whose result
     can be retrieved via ``.get()``.
@@ -265,7 +260,6 @@ def sample_async(kernel,
     decorator = _validate_ptsbe_args(kernel, args, shots_count, noise_model,
                                      max_trajectories, max_shots_per_path,
                                      max_live_states, allow_non_unitary,
-                                     unitary_noise_as_branch,
                                      include_sequential_data)
 
     if noise_model is None:
@@ -277,6 +271,6 @@ def sample_async(kernel,
         decorator.uniqName, module, shots_count, noise_model, max_trajectories,
         sampling_strategy, shot_allocation, return_execution_data,
         include_sequential_data, max_shots_per_path, max_live_states,
-        allow_non_unitary, unitary_noise_as_branch, *processedArgs)
+        allow_non_unitary, *processedArgs)
 
     return AsyncSampleResult(impl, module)

@@ -13,6 +13,7 @@
 #include "cudaq/algorithms/sample.h"
 #include "cudaq/runtime/logger/logger.h"
 #include "cudaq/simulators.h"
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <iostream>
@@ -365,10 +366,35 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 
   const bool frontier = frontierConfigured(options.max_live_states);
   batch.maxLiveStates = options.max_live_states;
-  batch.unitaryNoiseAsBranch = options.unitary_noise_as_branch;
 
   batch.trace = std::move(trace);
   batch.hasMidCircuitMeasurement = hasMidCircuitMeasurement(batch.trace);
+
+  auto noiseResult = extractNoiseSites(batch.trace, /*validate=*/true,
+                                       options.allow_non_unitary);
+  cudaq::info("[ptsbe] Extracted {} noise sites from {} total instructions",
+              noiseResult.noise_sites.size(), noiseResult.total_instructions);
+
+  // Mode selection is internal and automatic: there is one frontier executor
+  // whose configuration ranges from the fully degenerate flat pre-sample (B=1,
+  // no live branch sites) to the prefix-sharing tree. Unitary-mixture (Pauli)
+  // noise is folded into the live frontier as UnitaryBranch sites (tree mode)
+  // only when the trace already forces per-prefix re-evolution (mid-circuit
+  // measurement or admitted non-unitary Kraus) and the frontier is wide enough
+  // to co-locate branches (B > 1); the resample bounds live width past B.
+  // Otherwise unitary noise stays pre-sampled into flat roots: the degenerate
+  // terminal-only and B=1 / large-state configuration, where flat is already
+  // optimal and cloning would only add depth-first backtracking cost.
+  const bool nonUnitaryPresent =
+      options.allow_non_unitary &&
+      std::any_of(noiseResult.noise_sites.begin(),
+                  noiseResult.noise_sites.end(),
+                  [](const NoisePoint &point) { return point.is_non_unitary; });
+  const bool reEvolutionForced =
+      batch.hasMidCircuitMeasurement || nonUnitaryPresent;
+  const bool branchWidthPermits = frontier && *options.max_live_states > 1;
+  batch.unitaryNoiseAsBranch = reEvolutionForced && branchWidthPermits;
+
   auto envMaxShotsPerPath = maxShotsPerPathEnvOverride();
   if (envMaxShotsPerPath)
     cudaq::info("[ptsbe] max shots per path set to {} via "
@@ -391,10 +417,6 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
   // full records by default; the per-shot list on the sequential-data
   // channel is opt-in.
   batch.includeSequentialData = options.include_sequential_data;
-  auto noiseResult = extractNoiseSites(batch.trace, /*validate=*/true,
-                                       options.allow_non_unitary);
-  cudaq::info("[ptsbe] Extracted {} noise sites from {} total instructions",
-              noiseResult.noise_sites.size(), noiseResult.total_instructions);
 
   // Non-unitary sites are never pre-sampled: their branches are selected
   // during replay from true state-dependent probabilities, so only

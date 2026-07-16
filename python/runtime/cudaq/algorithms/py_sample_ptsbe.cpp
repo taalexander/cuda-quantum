@@ -39,17 +39,18 @@ using namespace cudaq;
 // nanobind 2.x cannot dispatch NB_TYPE_CASTER-based parameters (MlirModule)
 // when nanobind::object appears in the same function signature. Use concrete
 // std::optional types for all nullable parameters instead.
-static ptsbe::sample_result pySamplePTSBE(
-    const std::string &shortName, MlirModule module,
-    cudaq::CompiledModule *compiled, std::size_t shots_count,
-    noise_model noiseModel, std::optional<std::size_t> max_trajectories,
-    std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
-        sampling_strategy,
-    std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
-    bool return_execution_data, bool include_sequential_data,
-    std::optional<std::size_t> max_shots_per_path,
-    std::optional<std::size_t> max_live_states, bool allow_non_unitary,
-    bool unitary_noise_as_branch, nanobind::args runtimeArgs) {
+static ptsbe::sample_result
+pySamplePTSBE(const std::string &shortName, MlirModule module,
+              cudaq::CompiledModule *compiled, std::size_t shots_count,
+              noise_model noiseModel,
+              std::optional<std::size_t> max_trajectories,
+              std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
+                  sampling_strategy,
+              std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
+              bool return_execution_data, bool include_sequential_data,
+              std::optional<std::size_t> max_shots_per_path,
+              std::optional<std::size_t> max_live_states,
+              bool allow_non_unitary, nanobind::args runtimeArgs) {
   if (shots_count == 0)
     return ptsbe::sample_result();
 
@@ -60,7 +61,6 @@ static ptsbe::sample_result pySamplePTSBE(
   ptsbe_options.max_shots_per_path = max_shots_per_path;
   ptsbe_options.max_live_states = max_live_states;
   ptsbe_options.allow_non_unitary = allow_non_unitary;
-  ptsbe_options.unitary_noise_as_branch = unitary_noise_as_branch;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -116,16 +116,17 @@ struct AsyncPTSBESampleResultImpl {
 } // namespace
 
 /// @brief Run PTSBE sampling asynchronously from Python.
-static AsyncPTSBESampleResultImpl pySampleAsyncPTSBE(
-    const std::string &shortName, MlirModule module, std::size_t shots_count,
-    noise_model &noiseModel, std::optional<std::size_t> max_trajectories,
-    std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
-        sampling_strategy,
-    std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
-    bool return_execution_data, bool include_sequential_data,
-    std::optional<std::size_t> max_shots_per_path,
-    std::optional<std::size_t> max_live_states, bool allow_non_unitary,
-    bool unitary_noise_as_branch, nanobind::args runtimeArgs) {
+static AsyncPTSBESampleResultImpl
+pySampleAsyncPTSBE(const std::string &shortName, MlirModule module,
+                   std::size_t shots_count, noise_model &noiseModel,
+                   std::optional<std::size_t> max_trajectories,
+                   std::optional<std::shared_ptr<ptsbe::PTSSamplingStrategy>>
+                       sampling_strategy,
+                   std::optional<ptsbe::ShotAllocationStrategy> shot_allocation,
+                   bool return_execution_data, bool include_sequential_data,
+                   std::optional<std::size_t> max_shots_per_path,
+                   std::optional<std::size_t> max_live_states,
+                   bool allow_non_unitary, nanobind::args runtimeArgs) {
 
   ptsbe::PTSBEOptions ptsbe_options;
   ptsbe_options.return_execution_data = return_execution_data;
@@ -134,7 +135,6 @@ static AsyncPTSBESampleResultImpl pySampleAsyncPTSBE(
   ptsbe_options.max_shots_per_path = max_shots_per_path;
   ptsbe_options.max_live_states = max_live_states;
   ptsbe_options.allow_non_unitary = allow_non_unitary;
-  ptsbe_options.unitary_noise_as_branch = unitary_noise_as_branch;
 
   if (sampling_strategy)
     ptsbe_options.strategy = *sampling_strategy;
@@ -469,9 +469,7 @@ void cudaq::bindSamplePTSBE(nanobind::module_ &mod) {
             nanobind::arg("include_sequential_data"),
             nanobind::arg("max_shots_per_path").none(),
             nanobind::arg("max_live_states").none(),
-            nanobind::arg("allow_non_unitary"),
-            nanobind::arg("unitary_noise_as_branch"),
-            nanobind::arg("arguments"),
+            nanobind::arg("allow_non_unitary"), nanobind::arg("arguments"),
             R"pbdoc(
 Run PTSBE sampling on the provided kernel.
 
@@ -507,18 +505,17 @@ Returns:
 )pbdoc");
 
   // PTSBE async sample implementation
-  ptsbe.def(
-      "sample_async_impl", pySampleAsyncPTSBE, nanobind::arg("kernel_name"),
-      nanobind::arg("module"), nanobind::arg("shots_count"),
-      nanobind::arg("noise_model"), nanobind::arg("max_trajectories").none(),
-      nanobind::arg("sampling_strategy").none(),
-      nanobind::arg("shot_allocation").none(),
-      nanobind::arg("return_execution_data"),
-      nanobind::arg("include_sequential_data"),
-      nanobind::arg("max_shots_per_path").none(),
-      nanobind::arg("max_live_states").none(),
-      nanobind::arg("allow_non_unitary"),
-      nanobind::arg("unitary_noise_as_branch"), nanobind::arg("arguments"),
-      "Run PTSBE sampling asynchronously. Returns an "
-      "AsyncSampleResultImpl.");
+  ptsbe.def("sample_async_impl", pySampleAsyncPTSBE,
+            nanobind::arg("kernel_name"), nanobind::arg("module"),
+            nanobind::arg("shots_count"), nanobind::arg("noise_model"),
+            nanobind::arg("max_trajectories").none(),
+            nanobind::arg("sampling_strategy").none(),
+            nanobind::arg("shot_allocation").none(),
+            nanobind::arg("return_execution_data"),
+            nanobind::arg("include_sequential_data"),
+            nanobind::arg("max_shots_per_path").none(),
+            nanobind::arg("max_live_states").none(),
+            nanobind::arg("allow_non_unitary"), nanobind::arg("arguments"),
+            "Run PTSBE sampling asynchronously. Returns an "
+            "AsyncSampleResultImpl.");
 }
