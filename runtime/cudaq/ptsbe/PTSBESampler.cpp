@@ -24,7 +24,7 @@ TrajectoryReplay<ScalarType>
 mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
                          std::span<const GateTask<ScalarType>> gateCache,
                          const cudaq::KrausTrajectory &trajectory,
-                         bool includeIdentity) {
+                         bool includeIdentity, bool unitaryAsBranch) {
   const auto &selections = trajectory.kraus_selections;
 
   TrajectoryReplay<ScalarType> replay;
@@ -48,12 +48,20 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
       replay.ops.emplace_back(&gateCache[gateIdx++]);
       break;
     case TraceInstructionType::Noise:
-      // Unitary-mixture noise was pre-sampled into the trajectory and is
-      // resolved through the selection loop below. Non-unitary channels are
-      // never pre-sampled; they branch during replay at their true
-      // state-dependent probabilities.
+      // Non-unitary channels are never pre-sampled; they branch during replay
+      // at their true state-dependent probabilities (KrausBranch). Unitary
+      // mixtures are either pre-sampled into the trajectory and resolved
+      // through the selection loop below (default) or, in tree mode, folded
+      // into the frontier as a fixed-weight UnitaryBranch site. In tree mode
+      // the trajectory carries no pre-sampled selections for the unitary site,
+      // so the selection loop emits nothing and the two paths never
+      // double-apply.
       if (inst.channel && !inst.channel->is_unitary_mixture())
         replay.ops.emplace_back(&inst.channel.value(), inst.targets);
+      else if (inst.channel && unitaryAsBranch &&
+               inst.channel->is_unitary_mixture())
+        replay.ops.emplace_back(&inst.channel.value(), inst.targets,
+                                ReplayOpKind::UnitaryBranch);
       break;
     case TraceInstructionType::Measurement:
       replay.ops.emplace_back(inst.targets, inst.record_index,
@@ -93,11 +101,11 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
 template TrajectoryReplay<float>
 mergeSitesWithTrajectory<float>(std::span<const TraceInstruction>,
                                 std::span<const GateTask<float>>,
-                                const cudaq::KrausTrajectory &, bool);
+                                const cudaq::KrausTrajectory &, bool, bool);
 template TrajectoryReplay<double>
 mergeSitesWithTrajectory<double>(std::span<const TraceInstruction>,
                                  std::span<const GateTask<double>>,
-                                 const cudaq::KrausTrajectory &, bool);
+                                 const cudaq::KrausTrajectory &, bool, bool);
 
 } // namespace cudaq::ptsbe::detail
 
@@ -302,6 +310,16 @@ samplePTSBEGeneric(nvqir::CircuitSimulatorBase<ScalarType> &simulator,
                                      : terminalMeasureQubits(batch.trace);
   if (!batch.hasMidCircuitMeasurement && terminalQubits.empty())
     return {};
+
+  // Tree mode folds unitary noise into the live frontier as UnitaryBranch
+  // sites, which only the single-process batched frontier executes. The
+  // generic per-trajectory sampler has no frontier and would otherwise drop
+  // the pre-sample-free unitary noise silently, so reject it here.
+  if (batch.unitaryNoiseAsBranch)
+    throw std::runtime_error(
+        "PTSBE generic replay does not support the unitary-noise-in-frontier "
+        "tree mode: UnitaryBranch sites branch on the single-process batched "
+        "frontier executor, which requires a BatchSimulator backend.");
 
   // Replay-time Kraus branching needs per-branch state probabilities, which
   // nvqir::CircuitSimulator does not expose. Only BatchSimulator backends

@@ -49,7 +49,13 @@ struct PTSBEOptions {
   /// `nullopt` (default), selected automatically: 1 when
   /// the trace contains mid-circuit measurement or reset or when
   /// max_live_states is set, unlimited otherwise. An explicit 0 forces
-  /// unlimited. The environment variable
+  /// unlimited. On the batched frontier executor (max_live_states set),
+  /// 0 selects multiplicity carrying: one replay path carries the whole
+  /// root shot count as slot-0 multiplicity, branch and measure sites split
+  /// that multiplicity, and identical (trajectory x syndrome) histories merge
+  /// into one counted leaf. This is the tree-mode saturation behavior; a
+  /// positive cap instead ties terminalSamplesPerPath shots together per path
+  /// and draws them independently at the leaf. The environment variable
   /// `CUDAQ_PTSBE_MAX_SHOTS_PER_PATH` takes precedence over this option.
   std::optional<std::size_t> max_shots_per_path = std::nullopt;
 
@@ -74,6 +80,25 @@ struct PTSBEOptions {
   /// non-unitary sampling needs no capacity knob. Requires a BatchSimulator
   /// backend; the generic per-trajectory sampler rejects non-unitary sites.
   bool allow_non_unitary = false;
+
+  /// Fold unitary-mixture (Pauli) noise into the live branching frontier as
+  /// UnitaryBranch sites instead of pre-sampling it into flat independent
+  /// roots. Trajectories that agree early then share their evolved prefix: a
+  /// shared prefix node evolves once and clones at branch nodes, with the
+  /// split drawn from the channel's fixed state-independent weights (no GPU
+  /// probability readback). The ahead-of-time global dedup is preserved; this
+  /// only retains the shared-prefix structure the flat list discards. Requires
+  /// the single-process batched frontier executor (max_live_states set or
+  /// auto-selected). The intended large-state fallback is that at B = 1 the
+  /// frontier reduces to the flat independent population; that reduction is not
+  /// yet enforced in the multiplicity-carrying tree path, which instead stops
+  /// with an error when a trajectory's cumulative branch fan-out would exceed
+  /// max_live_states (the design's multinomial resample-down-to-B is not yet
+  /// implemented). Choose max_live_states at least as large as the trajectory's
+  /// distinct-outcome width, or leave unitary noise pre-sampled for the
+  /// large-state case. When false (default) unitary noise stays pre-sampled and
+  /// every existing result is byte-identical.
+  bool unitary_noise_as_branch = false;
 
   /// Custom sampling strategy. If `nullptr`, uses default strategy.
   std::shared_ptr<PTSSamplingStrategy> strategy = nullptr;

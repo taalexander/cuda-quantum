@@ -365,6 +365,7 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 
   const bool frontier = frontierConfigured(options.max_live_states);
   batch.maxLiveStates = options.max_live_states;
+  batch.unitaryNoiseAsBranch = options.unitary_noise_as_branch;
 
   batch.trace = std::move(trace);
   batch.hasMidCircuitMeasurement = hasMidCircuitMeasurement(batch.trace);
@@ -375,11 +376,17 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
                 *envMaxShotsPerPath);
   // The frontier default is one terminal sample per path (T=1, so
   // C_u = N_u), which always satisfies the integer-allocation conditions.
+  // Tree mode instead carries the whole root multiplicity on one path
+  // (unlimited, 0) so identical trajectory-and-syndrome histories merge into
+  // one counted leaf; its Measure and branch splits divide that multiplicity.
   batch.maxShotsPerPath =
       envMaxShotsPerPath.has_value()
           ? *envMaxShotsPerPath
           : options.max_shots_per_path.value_or(
-                (batch.hasMidCircuitMeasurement || frontier) ? 1 : 0);
+                (!batch.unitaryNoiseAsBranch &&
+                 (batch.hasMidCircuitMeasurement || frontier))
+                    ? 1
+                    : 0);
   // Mid-circuit replay aggregates per-shot records into counts over unique
   // full records by default; the per-shot list on the sequential-data
   // channel is opt-in.
@@ -391,9 +398,14 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 
   // Non-unitary sites are never pre-sampled: their branches are selected
   // during replay from true state-dependent probabilities, so only
-  // unitary-mixture sites feed root trajectory generation.
+  // unitary-mixture sites feed root trajectory generation. In tree mode the
+  // unitary-mixture sites are folded into the frontier too (UnitaryBranch), so
+  // no site is pre-sampled and the noise-free fallback below builds one
+  // all-shots identity root carrying every branch site.
   auto sampledSites = std::move(noiseResult.noise_sites);
-  if (options.allow_non_unitary)
+  if (batch.unitaryNoiseAsBranch)
+    sampledSites.clear();
+  else if (options.allow_non_unitary)
     std::erase_if(sampledSites,
                   [](const NoisePoint &point) { return point.is_non_unitary; });
 

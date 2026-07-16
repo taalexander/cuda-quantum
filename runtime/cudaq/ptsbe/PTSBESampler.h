@@ -57,6 +57,17 @@ struct PTSBatch {
   /// executor choose its capacity.
   std::optional<std::size_t> maxLiveStates = std::nullopt;
 
+  /// @brief Fold unitary-mixture (Pauli) noise into the live frontier as
+  /// UnitaryBranch sites instead of pre-sampling it into flat roots
+  /// (PTSBEOptions::unitary_noise_as_branch). When true the trace's
+  /// unitary-mixture sites are not pre-sampled, so trajectories carry no
+  /// selections for them, and the frontier walker branches them at the
+  /// channel's fixed state-independent weights (shared prefixes evolved once,
+  /// cloned at branch nodes). Requires the single-process batched frontier
+  /// executor. When false (default) unitary noise stays pre-sampled and every
+  /// existing path is byte-identical.
+  bool unitaryNoiseAsBranch = false;
+
   /// @brief Calculate total shots across all trajectories
   std::size_t totalShots() const;
 

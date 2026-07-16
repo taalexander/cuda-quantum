@@ -61,8 +61,12 @@ using GateTask =
 /// fused measure-and-reset, and a bare reset are one probability-and-collapse
 /// operation distinguished by ReplayOp::recordOffset (whether a bit is
 /// recorded) and ReplayOp::resetAfter (whether the collapsed qubits return to
-/// |0>). KrausBranch marks a general (non-unitary) Kraus site.
-enum class ReplayOpKind { Gate, Measure, KrausBranch };
+/// |0>). KrausBranch marks a general (non-unitary) Kraus site. UnitaryBranch
+/// marks a unitary-mixture (Pauli) site folded into the live frontier instead
+/// of pre-sampled into flat roots: its branch weights are the channel's fixed,
+/// state-independent probabilities, so the split is a pure host multinomial
+/// with no GPU probability readback, and the chosen operator applies unscaled.
+enum class ReplayOpKind { Gate, Measure, KrausBranch, UnitaryBranch };
 
 /// @brief One site-ordered operation in a merged trajectory replay list.
 ///
@@ -75,7 +79,10 @@ enum class ReplayOpKind { Gate, Measure, KrausBranch };
 /// general (non-unitary) Kraus sites whose branch is selected during replay
 /// from its true state-dependent probabilities; they carry the site's qubits
 /// and a non-owning pointer to the raw channel in the caller's trace, which
-/// must outlive the replay.
+/// must outlive the replay. UnitaryBranch ops mark a unitary-mixture site
+/// folded into the frontier: they carry the same non-owning channel pointer
+/// (source of the fixed probabilities and unitary_ops) and site qubits, and
+/// the branch is selected during replay from the channel's fixed weights.
 template <typename ScalarType>
 struct ReplayOp {
   ReplayOpKind kind;
@@ -97,6 +104,13 @@ struct ReplayOp {
            std::vector<std::size_t> qubits)
       : kind(ReplayOpKind::KrausBranch), qubits(std::move(qubits)),
         channel(branchChannel) {}
+
+  /// Tagged branch-site constructor. branchKind selects KrausBranch (general
+  /// non-unitary) or UnitaryBranch (fixed-weight unitary mixture); both carry
+  /// the same non-owning channel pointer and site qubits.
+  ReplayOp(const cudaq::kraus_channel *branchChannel,
+           std::vector<std::size_t> qubits, ReplayOpKind branchKind)
+      : kind(branchKind), qubits(std::move(qubits)), channel(branchChannel) {}
 };
 
 /// @brief Site-ordered replay list for one trajectory.
@@ -131,12 +145,18 @@ struct TrajectoryReplay {
 /// @param includeIdentity When true, identity Kraus operators are
 ///   included as Gate ops. Useful if you require all trajectories to have
 ///   identical op structure.
+/// @param unitaryAsBranch When true, unitary-mixture Noise sites are emitted as
+///   UnitaryBranch ops folded into the frontier rather than resolved through
+///   the trajectory's pre-sampled selection loop. The caller must ensure such
+///   trajectories carry no pre-sampled selections for those sites (tree mode
+///   pre-samples no unitary sites) so the two paths do not double-apply.
 template <typename ScalarType>
 TrajectoryReplay<ScalarType>
 mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
                          std::span<const GateTask<ScalarType>> gateCache,
                          const cudaq::KrausTrajectory &trajectory,
-                         bool includeIdentity = false);
+                         bool includeIdentity = false,
+                         bool unitaryAsBranch = false);
 
 /// @brief Per-shot replay of one trajectory's site-ordered op list, shared by
 /// the generic CircuitSimulator fallback (samplePTSBEGeneric) and the base
@@ -179,6 +199,11 @@ replayTrajectoryPerShot(const std::vector<ReplayOp<ScalarType>> &ops,
             "PTSBE per-shot replay cannot execute a KrausBranch site: "
             "non-unitary Kraus sites branch at state-dependent probabilities "
             "and require the single-process batched frontier executor.");
+      case ReplayOpKind::UnitaryBranch:
+        throw std::runtime_error(
+            "PTSBE per-shot replay cannot execute a UnitaryBranch site: "
+            "unitary-mixture sites folded into the frontier branch on the "
+            "single-process batched frontier executor.");
       }
     }
     policy.finishShot();
