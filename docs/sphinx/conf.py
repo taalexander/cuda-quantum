@@ -20,6 +20,7 @@
 
 import os
 import sphinx_rtd_theme
+from pygments.lexers.special import TextLexer
 
 # -- Project information -----------------------------------------------------
 
@@ -114,13 +115,13 @@ master_doc = 'index'
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = [
-    '**/_*', '.DS_Store', 'examples/python/building_kernels.ipynb',
+    '_doxygen/**', '_static/**', '_tags/**', '_templates/**',
+    '**/__pycache__/**', '_mdgen/CompilerPasses.md',
+    'using/extending/_noise.rst', '.DS_Store',
+    'examples/python/building_kernels.ipynb',
     'examples/python/measuring_kernels.ipynb',
     'examples/python/executing_kernels.ipynb', 'examples/python/operators.ipynb'
 ]
-
-#redirect links
-redirects = {"backends/dynamics": "../dynamics.html"}
 
 # The reST default role (used for this markup: `text`) to use for all documents.
 default_role = 'code'  # NOTE: the following may be a better choice to error on the side of flagging anything that is referenced but but not declared
@@ -165,6 +166,8 @@ htmlhelp_basename = 'cudaqDoc'
 
 def setup(app):
     app.add_css_file('cudaq_override.css')
+    # Pygments does not provide an MLIR lexer, but generated references use it.
+    app.add_lexer('mlir', TextLexer)
 
 
 # -- Options for BREATHE -------------------------------------------------
@@ -188,7 +191,19 @@ intersphinx_mapping = {
     'numpy': ('https://numpy.org/doc/stable/', None),
 }
 
-redirects = {"versions": "../latest/releases.html"}
+redirects = {
+    "backends/dynamics": "../dynamics.html",
+    "versions": "../latest/releases.html",
+    "using/extending/extending": "../developers/index.html",
+    "using/extending/cudaq_ir": "../developers/compiler/cudaq_ir.html",
+    "using/extending/mlir_pass": "../developers/compiler/pass_plugins.html",
+    "using/extending/available_passes":
+        "../developers/compiler/available_passes.html",
+    "using/extending/dialect_reference":
+        "../developers/compiler/dialect_reference.html",
+    "using/extending/backend": "../developers/backend.html",
+    "using/extending/nvqir_simulator": "../developers/nvqir_simulator.html",
+}
 
 nitpick_ignore = [
     ('cpp:identifier', 'GlobalRegisterName'),

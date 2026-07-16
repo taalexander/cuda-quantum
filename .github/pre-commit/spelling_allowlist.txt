@@ -175,6 +175,7 @@ Vivado
 WQEs
 WSL
 Xcode
+YAML
 Zener
 accessor
 acknowledgement
@@ -234,6 +235,7 @@ cortex-cli
 counterdiabatic
 coupler
 couplers
+cpp
 cuQuantum
 cuTensor
 cudaq

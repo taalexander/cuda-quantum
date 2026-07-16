@@ -170,7 +170,9 @@ cd "$repo_root/docs"
 rm -rf sphinx/_doxygen/
 rm -rf sphinx/_mdgen/
 cp -r "$doxygen_output_dir" sphinx/_doxygen/
-# cp -r "$dialect_output_dir" sphinx/_mdgen/ # uncomment once we use the content from those files
+mkdir -p sphinx/_mdgen/
+cp "$docs_build_output/CompilerPasses.md" sphinx/_mdgen/
+cp -r "$dialect_output_dir" sphinx/_mdgen/
 
 rm -rf "$sphinx_output_dir"
 echo "Running sphinx in $PWD"

@@ -24,6 +24,6 @@
 
 - [Installation](latest/using/install/install.md)
 - [Integration](latest/using/integration/integration.md)
-- [Extending](latest/using/extending/extending.md)
+- [Extending](latest/using/developers/index.md)
 - [Specifications](latest/specification/index.md)
 - [llms-full.txt](latest/llms-full.txt): Full concatenated content of this documentation
