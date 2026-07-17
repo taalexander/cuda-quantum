@@ -15,6 +15,8 @@ CUDA-Q compiler development
       :maxdepth: 1
 
       CUDA-Q dialect documentation <dialect_reference>
+      Developing compiler passes <mlir_pass>
+      Available compiler passes <available_passes>
 
 CUDA-Q compiles C++ and Python quantum kernels using the
 `MLIR compiler infrastructure <https://mlir.llvm.org/>`_. The language frontends
@@ -58,6 +60,9 @@ pipeline.
 
    * Browse :doc:`dialect_reference` for the generated operation and type
      documentation for the CUDA-Q dialects.
+   * Follow :doc:`mlir_pass` to implement, test, and integrate a compiler pass.
+   * Browse :doc:`available_passes` for the complete list of registered CUDA-Q
+     transformation and code generation passes and their options.
 
 .. rubric:: Code organization
 

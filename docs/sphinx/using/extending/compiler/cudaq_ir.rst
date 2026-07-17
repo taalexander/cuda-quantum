@@ -26,6 +26,13 @@ For an agreed IR change, state the operations and forms that the transformation
 accepts, the properties it preserves, and the IR it produces. Record these
 expectations in the implementation and its tests.
 
+.. only:: compiler_developer_docs
+
+   See :doc:`Developing compiler passes <mlir_pass>` for guidance on documenting
+   and testing these expectations in a built-in or external pass. The
+   :doc:`available pass catalog <available_passes>` lists the registered CUDA-Q
+   passes and their options.
+
 CUDA-Q dialects
 ===============
 
