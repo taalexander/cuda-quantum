@@ -66,6 +66,6 @@ uses the paths produced by the in-tree build:
 
 .. :spellcheck-enable:
 
-The accompanying regression loads the plugin into ``cudaq-opt`` and checks the
-transformed IR. The pass is registered only for that invocation and is not
+A corresponding regression test loads the plugin into ``cudaq-opt`` and checks
+the transformed IR. The pass is registered only for that invocation and is not
 added to a CUDA-Q compilation pipeline.
