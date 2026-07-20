@@ -387,13 +387,9 @@ cudaq::ptsbe::detail::allocateCounts(std::span<const LogMassBin> inputBins,
 
   const auto residualTotal =
       std::accumulate(residuals.begin(), residuals.end(), 0.0);
-  const auto residualTolerance = 64.0 * std::numeric_limits<double>::epsilon() *
-                                 std::max(1.0, static_cast<double>(shots));
-  if (!std::isfinite(residualTotal) || residualTotal <= 0.0 ||
-      std::abs(residualTotal - static_cast<double>(remainder)) >
-          residualTolerance)
+  if (!std::isfinite(residualTotal) || residualTotal <= 0.0)
     throw std::invalid_argument(
-        "fractional residual mass does not match allocation remainder");
+        "fractional residual mass must be finite and positive");
 
   if (resampler == FinalResampler::Residual) {
     drawMultinomial(residuals, remainder, 0);

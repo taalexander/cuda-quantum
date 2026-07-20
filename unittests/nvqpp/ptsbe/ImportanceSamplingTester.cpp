@@ -517,6 +517,19 @@ CUDAQ_TEST(ImportanceAllocatorTest, ResidualUsesDirectFloorWithoutSnapping) {
         << "seed=" << seed;
 }
 
+CUDAQ_TEST(ImportanceAllocatorTest,
+           LargeResidualHistogramConservesRequestedCount) {
+  std::vector<LogMassBin> bins;
+  bins.reserve(10000);
+  for (std::size_t index = 0; index < 10000; ++index)
+    bins.push_back({std::to_string(index), 0.0});
+
+  for (const auto resampler :
+       {FinalResampler::Residual, FinalResampler::ResidualStratified})
+    EXPECT_EQ(countTotal(allocateCounts(bins, 10000, resampler, 20260702)),
+              10000);
+}
+
 CUDAQ_TEST(ImportanceAllocatorTest, SequentialShuffleMatchesAggregateCounts) {
   const std::vector<CountBin> counts = {{"11", 3}, {"00", 5}, {"01", 2}};
   const auto first = makeSequentialData(counts, 20260708);
