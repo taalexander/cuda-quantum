@@ -471,6 +471,18 @@ CUDAQ_TEST(ImportanceAllocatorTest, FixedSeedAndInsertionOrderAreStable) {
               allocateCounts(reverse, 137, resampler, 20260707));
 }
 
+CUDAQ_TEST(ImportanceAllocatorTest, OmitsZeroCountBins) {
+  const std::vector<LogMassBin> bins = {
+      {"00", std::log(0.8)}, {"01", std::log(0.15)}, {"10", std::log(0.05)}};
+  for (const auto resampler :
+       {FinalResampler::Multinomial, FinalResampler::Residual,
+        FinalResampler::ResidualStratified}) {
+    const auto counts = allocateCounts(bins, 1, resampler, 20260720);
+    ASSERT_EQ(counts.size(), 1);
+    EXPECT_EQ(counts.front().count, 1);
+  }
+}
+
 CUDAQ_TEST(ImportanceAllocatorTest, CoversOneBinZeroRemainderAndTinyResiduals) {
   const std::vector<LogMassBin> oneBin{{"101", 0.0}};
   for (const auto resampler :

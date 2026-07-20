@@ -335,8 +335,12 @@ cudaq::ptsbe::detail::allocateCounts(std::span<const LogMassBin> inputBins,
   counts.reserve(canonicalMass.size());
   for (const auto &[record, logMass] : canonicalMass)
     counts.push_back({record, 0});
+  const auto removeZeroCounts = [&]() {
+    std::erase_if(
+        counts, [](const auto &bin) { return bin.count == std::uint64_t{0}; });
+  };
   if (shots == 0)
-    return counts;
+    return {};
 
   const auto drawMultinomial = [&](std::span<const double> masses,
                                    std::uint64_t draws,
@@ -354,6 +358,7 @@ cudaq::ptsbe::detail::allocateCounts(std::span<const LogMassBin> inputBins,
 
   if (resampler == FinalResampler::Multinomial) {
     drawMultinomial(probabilities, shots, 0);
+    removeZeroCounts();
     return counts;
   }
 
@@ -382,8 +387,10 @@ cudaq::ptsbe::detail::allocateCounts(std::span<const LogMassBin> inputBins,
     throw std::invalid_argument(
         "deterministic allocation exceeds requested count");
   const auto remainder = shots - deterministicTotal;
-  if (remainder == 0)
+  if (remainder == 0) {
+    removeZeroCounts();
     return counts;
+  }
 
   const auto residualTotal =
       std::accumulate(residuals.begin(), residuals.end(), 0.0);
@@ -393,6 +400,7 @@ cudaq::ptsbe::detail::allocateCounts(std::span<const LogMassBin> inputBins,
 
   if (resampler == FinalResampler::Residual) {
     drawMultinomial(residuals, remainder, 0);
+    removeZeroCounts();
     return counts;
   }
 
@@ -412,6 +420,7 @@ cudaq::ptsbe::detail::allocateCounts(std::span<const LogMassBin> inputBins,
     }
     ++counts[selected].count;
   }
+  removeZeroCounts();
   return counts;
 }
 

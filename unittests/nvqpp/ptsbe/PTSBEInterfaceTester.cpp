@@ -41,6 +41,7 @@ struct MockImportanceBatchSimulator : ptsbe::BatchSimulator,
                                       ptsbe::ImportanceBatchSimulator {
   bool importanceCalled = false;
   bool returnUnitWeightHistogram = false;
+  bool returnSparseWeightedBins = false;
 
   std::vector<cudaq::sample_result>
   sampleWithPTSBE(const ptsbe::PTSBatch &) override {
@@ -52,7 +53,12 @@ struct MockImportanceBatchSimulator : ptsbe::BatchSimulator,
                             ptsbe::ImportanceExecutionRequest) override {
     importanceCalled = true;
     ptsbe::ImportanceExecutionResult result;
-    result.bins = {{"0", std::log(0.25)}, {"1", std::log(0.75)}};
+    result.bins =
+        returnSparseWeightedBins
+            ? std::vector<ptsbe::detail::LogMassBin>{{"0", std::log(0.999)},
+                                                     {"1", std::log(0.001)}}
+            : std::vector<ptsbe::detail::LogMassBin>{{"0", std::log(0.25)},
+                                                     {"1", std::log(0.75)}};
     if (returnUnitWeightHistogram)
       result.unitWeightHistogram =
           std::vector<ptsbe::detail::CountBin>{{"0", 3}, {"1", 7}};
@@ -84,6 +90,29 @@ CUDAQ_TEST(PTSBEInterfaceTest, PTSBatchWithTrajectories) {
 
   EXPECT_EQ(batch.trajectories.size(), 5);
   EXPECT_EQ(batch.trajectories[2].num_shots, 600);
+}
+
+CUDAQ_TEST(PTSBEInterfaceTest, ImportanceFinalizerOmitsZeroCountRecords) {
+  ptsbe::PTSBatch batch;
+  batch.trace = {{ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}}};
+  cudaq::KrausTrajectory root;
+  root.num_shots = 1;
+  batch.trajectories.push_back(root);
+  batch.maxLiveStates = 4;
+  batch.importanceExperiment =
+      std::make_shared<const ptsbe::detail::ImportanceExperimentState>(
+          ptsbe::detail::ImportanceExperimentState{
+              {.mode = ptsbe::detail::NonUnitaryMode::Importance,
+               .resampler = ptsbe::detail::FinalResampler::ResidualStratified},
+              20260720});
+
+  MockImportanceBatchSimulator simulator;
+  simulator.returnSparseWeightedBins = true;
+  const auto result = ptsbe::detail::finalizeImportancePTSBE(simulator, batch);
+
+  const auto counts = result.to_map();
+  ASSERT_EQ(counts.size(), 1);
+  EXPECT_EQ(counts.begin()->second, 1u);
 }
 
 CUDAQ_TEST(PTSBEInterfaceTest,
