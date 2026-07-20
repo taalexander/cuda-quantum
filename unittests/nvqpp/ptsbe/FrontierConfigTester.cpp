@@ -13,6 +13,7 @@
 #include "cudaq/ptsbe/PTSBESample.h"
 #include "cudaq/ptsbe/PTSBESamplerImpl.h"
 #include "cudaq/ptsbe/strategies/ProbabilisticSamplingStrategy.h"
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <memory>
 #include <numeric>
@@ -24,6 +25,34 @@ using cudaq::ptsbe::detail::mergeSitesWithTrajectory;
 using cudaq::ptsbe::detail::ReplayOpKind;
 
 namespace {
+
+struct ScopedNonUnitaryMode {
+  std::optional<std::string> previous;
+
+  explicit ScopedNonUnitaryMode(const char *mode) {
+    if (const auto *value = std::getenv("CUDAQ_PTSBE_NONUNITARY_MODE"))
+      previous = value;
+    setenv("CUDAQ_PTSBE_NONUNITARY_MODE", mode, 1);
+  }
+
+  ~ScopedNonUnitaryMode() {
+    if (previous)
+      setenv("CUDAQ_PTSBE_NONUNITARY_MODE", previous->c_str(), 1);
+    else
+      unsetenv("CUDAQ_PTSBE_NONUNITARY_MODE");
+  }
+};
+
+struct ScopedCudaqSeed {
+  std::size_t previous;
+
+  explicit ScopedCudaqSeed(std::size_t seed)
+      : previous(cudaq::get_random_seed()) {
+    cudaq::set_random_seed(seed);
+  }
+
+  ~ScopedCudaqSeed() { cudaq::set_random_seed(previous); }
+};
 
 /// Run `fn` and require it to throw `Exception` whose message contains
 /// `needle`.
@@ -69,6 +98,120 @@ TEST(FrontierConfigTest, OptionsDefaultsUnset) {
   PTSBEOptions options;
   EXPECT_FALSE(options.max_live_states.has_value());
   EXPECT_FALSE(options.allow_non_unitary);
+}
+
+TEST(FrontierConfigTest, ImportanceBuildsOneFullBudgetRoot) {
+  ScopedNonUnitaryMode mode("importance");
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 8;
+
+  const auto batch = buildBatch(amplitudeDampingOnH(), options, 257);
+  ASSERT_TRUE(batch.importanceExperiment);
+  EXPECT_EQ(batch.importanceExperiment->config.mode,
+            detail::NonUnitaryMode::Importance);
+  EXPECT_EQ(batch.maxShotsPerPath, 0);
+  EXPECT_TRUE(batch.unitaryNoiseAsBranch);
+  ASSERT_EQ(batch.trajectories.size(), 1);
+  EXPECT_EQ(batch.trajectories[0].num_shots, 257);
+  EXPECT_TRUE(batch.trajectories[0].kraus_selections.empty());
+}
+
+TEST(FrontierConfigTest, ImportanceRequestOwnsValidatedProposalData) {
+  ScopedNonUnitaryMode mode("importance");
+  ScopedCudaqSeed seed(20260709);
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 8;
+  auto batch = buildBatch(amplitudeDampingOnH(0.25), options, 17);
+
+  const auto request = buildImportanceExecutionRequest(batch);
+  EXPECT_EQ(request.seed, 20260709);
+  EXPECT_EQ(request.capacity, 8);
+  EXPECT_EQ(request.mode, detail::NonUnitaryMode::Importance);
+  ASSERT_EQ(request.krausProposals.size(), 1);
+  EXPECT_EQ(request.krausProposals[0].originalBranchIndices,
+            (std::vector<std::size_t>{0, 1}));
+  EXPECT_NEAR(request.krausProposals[0].probabilities[1], 0.125, 1e-15);
+
+  batch.trace.clear();
+  EXPECT_EQ(request.krausProposals[0].probabilities.size(), 2);
+}
+
+TEST(FrontierConfigTest, ImportanceRejectsUnsupportedBackendInPreflight) {
+  PTSBatch batch;
+  batch.importanceExperiment =
+      std::make_shared<const detail::ImportanceExperimentState>(
+          detail::ImportanceExperimentState{
+              {.mode = detail::NonUnitaryMode::Importance}, 20260709});
+  EXPECT_THROW(detail::validatePTSBEBackendSupport(batch), std::runtime_error);
+}
+
+TEST(FrontierConfigTest, CountedWaveUsesSameFullBudgetRootContract) {
+  ScopedNonUnitaryMode mode("counted_wave");
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 4;
+
+  const auto batch = buildBatch(amplitudeDampingOnH(), options, 33);
+  ASSERT_TRUE(batch.importanceExperiment);
+  EXPECT_EQ(batch.importanceExperiment->config.mode,
+            detail::NonUnitaryMode::CountedWave);
+  EXPECT_EQ(batch.maxShotsPerPath, 0);
+  ASSERT_EQ(batch.trajectories.size(), 1);
+  EXPECT_EQ(batch.trajectories[0].num_shots, 33);
+}
+
+TEST(FrontierConfigTest, CandidateModesRequireExplicitCapacityAtLeastTwo) {
+  for (const auto *modeName : {"importance", "counted_wave"}) {
+    ScopedNonUnitaryMode mode(modeName);
+    PTSBEOptions missing;
+    missing.allow_non_unitary = true;
+    EXPECT_THROW(buildBatch(amplitudeDampingOnH(), missing, 8),
+                 std::invalid_argument);
+
+    PTSBEOptions tooSmall;
+    tooSmall.allow_non_unitary = true;
+    tooSmall.max_live_states = 1;
+    EXPECT_THROW(buildBatch(amplitudeDampingOnH(), tooSmall, 8),
+                 std::invalid_argument);
+  }
+}
+
+TEST(FrontierConfigTest, ImportanceRejectsPopulationChangingOptions) {
+  ScopedNonUnitaryMode mode("importance");
+  auto validOptions = [] {
+    PTSBEOptions options;
+    options.allow_non_unitary = true;
+    options.max_live_states = 8;
+    return options;
+  };
+
+  auto maxTrajectories = validOptions();
+  maxTrajectories.max_trajectories = 8;
+  EXPECT_THROW(buildBatch(amplitudeDampingOnH(), maxTrajectories, 16),
+               std::invalid_argument);
+
+  auto positivePathCap = validOptions();
+  positivePathCap.max_shots_per_path = 1;
+  EXPECT_THROW(buildBatch(amplitudeDampingOnH(), positivePathCap, 16),
+               std::invalid_argument);
+
+  auto customStrategy = validOptions();
+  customStrategy.strategy = std::make_shared<ProbabilisticSamplingStrategy>(17);
+  EXPECT_THROW(buildBatch(amplitudeDampingOnH(), customStrategy, 16),
+               std::invalid_argument);
+
+  auto customAllocation = validOptions();
+  customAllocation.shot_allocation =
+      ShotAllocationStrategy(ShotAllocationStrategy::Type::UNIFORM);
+  EXPECT_THROW(buildBatch(amplitudeDampingOnH(), customAllocation, 16),
+               std::invalid_argument);
+
+  auto executionData = validOptions();
+  executionData.return_execution_data = true;
+  EXPECT_THROW(buildBatch(amplitudeDampingOnH(), executionData, 16),
+               std::invalid_argument);
 }
 
 TEST(FrontierConfigTest, KnobsUnsetKeepTerminalBehavior) {

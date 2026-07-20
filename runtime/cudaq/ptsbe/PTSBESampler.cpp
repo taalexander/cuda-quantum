@@ -13,9 +13,46 @@
 #include "cudaq/runtime/logger/logger.h"
 #include "cudaq/simulators.h"
 #include <algorithm>
+#include <chrono>
+#include <limits>
 #include <numeric>
 #include <span>
 #include <stdexcept>
+
+cudaq::ptsbe::ImportanceBatchSimulator &
+cudaq::ptsbe::requireImportanceBatchSimulator(BatchSimulator &sim) {
+  if (auto *importance = dynamic_cast<ImportanceBatchSimulator *>(&sim))
+    return *importance;
+  throw std::runtime_error("The selected simulator does not implement the "
+                           "experimental PTSBE importance interface.");
+}
+
+cudaq::ptsbe::ImportanceExecutionRequest
+cudaq::ptsbe::buildImportanceExecutionRequest(const PTSBatch &batch) {
+  if (!batch.importanceExperiment ||
+      batch.importanceExperiment->config.mode !=
+          detail::NonUnitaryMode::Importance ||
+      !batch.maxLiveStates || *batch.maxLiveStates < 2)
+    throw std::invalid_argument("importance execution request requires an "
+                                "importance batch with capacity >= 2");
+  ImportanceExecutionRequest request;
+  request.seed = batch.importanceExperiment->seed;
+  request.capacity = *batch.maxLiveStates;
+  request.normalization = batch.importanceExperiment->config.normalization;
+  request.checkpointSites = batch.importanceExperiment->config.checkpointSites;
+  request.mode = batch.importanceExperiment->config.mode;
+  for (std::size_t traceSite = 0; traceSite < batch.trace.size(); ++traceSite) {
+    const auto &instruction = batch.trace[traceSite];
+    if (instruction.type != TraceInstructionType::Noise ||
+        !instruction.channel || instruction.channel->is_unitary_mixture())
+      continue;
+    const auto proposal =
+        detail::buildKrausProposal(instruction.channel->get_ops());
+    request.krausProposals.push_back(
+        {traceSite, proposal.probabilities, proposal.originalBranchIndices});
+  }
+  return request;
+}
 
 namespace cudaq::ptsbe::detail {
 
@@ -45,7 +82,7 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
             std::to_string(gateCache.size()) +
             " tasks but the trace has more Gate instructions; build the "
             "cache from the same trace with convertTraceGates");
-      replay.ops.emplace_back(&gateCache[gateIdx++]);
+      replay.ops.emplace_back(&gateCache[gateIdx++], i);
       break;
     case TraceInstructionType::Noise:
       // Non-unitary channels are never pre-sampled; they branch during replay
@@ -57,23 +94,23 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
       // so the selection loop emits nothing and the two paths never
       // double-apply.
       if (inst.channel && !inst.channel->is_unitary_mixture())
-        replay.ops.emplace_back(&inst.channel.value(), inst.targets);
+        replay.ops.emplace_back(&inst.channel.value(), inst.targets, i);
       else if (inst.channel && unitaryAsBranch &&
                inst.channel->is_unitary_mixture())
         replay.ops.emplace_back(&inst.channel.value(), inst.targets,
-                                ReplayOpKind::UnitaryBranch);
+                                ReplayOpKind::UnitaryBranch, i);
       break;
     case TraceInstructionType::Measurement:
       replay.ops.emplace_back(inst.targets, inst.record_index,
-                              /*resetAfter=*/false);
+                              /*resetAfter=*/false, i);
       break;
     case TraceInstructionType::Reset:
       replay.ops.emplace_back(inst.targets, std::nullopt,
-                              /*resetAfter=*/true);
+                              /*resetAfter=*/true, i);
       break;
     case TraceInstructionType::MeasureReset:
       replay.ops.emplace_back(inst.targets, inst.record_index,
-                              /*resetAfter=*/true);
+                              /*resetAfter=*/true, i);
       break;
     }
 
@@ -82,7 +119,7 @@ mergeSitesWithTrajectory(std::span<const TraceInstruction> ptsbeTrace,
       if (includeIdentity || selections[noiseIdx].is_error) {
         replay.krausTasks.push_back(
             krausSelectionToTask<ScalarType>(selections[noiseIdx], inst));
-        replay.ops.emplace_back(&replay.krausTasks.back());
+        replay.ops.emplace_back(&replay.krausTasks.back(), i);
       }
       ++noiseIdx;
     }
@@ -453,11 +490,103 @@ std::vector<cudaq::sample_result> samplePTSBE(const PTSBatch &batch) {
   }
 }
 
+void validatePTSBEBackendSupport(const PTSBatch &batch) {
+  if (!batch.importanceExperiment ||
+      batch.importanceExperiment->config.mode != NonUnitaryMode::Importance)
+    return;
+  if (cudaq::getEnvBool("CUDAQ_PTSBE_FORCE_GENERIC", false))
+    throw std::runtime_error(
+        "PTSBE importance mode cannot use the generic simulator path.");
+  auto *baseSimulator = nvqir::getCircuitSimulatorInternal();
+  auto *batchSimulator =
+      dynamic_cast<cudaq::ptsbe::BatchSimulator *>(baseSimulator);
+  if (!batchSimulator)
+    throw std::runtime_error(
+        "The selected simulator does not implement the PTSBE batch interface "
+        "required by importance mode.");
+  cudaq::ptsbe::requireImportanceBatchSimulator(*batchSimulator);
+}
+
+cudaq::sample_result finalizeImportancePTSBE(BatchSimulator &simulator,
+                                             const PTSBatch &batch) {
+  if (!batch.importanceExperiment ||
+      batch.importanceExperiment->config.mode != NonUnitaryMode::Importance)
+    throw std::invalid_argument(
+        "importance finalization requires opaque experiment state");
+  const auto &experiment = *batch.importanceExperiment;
+  auto &importanceSimulator =
+      cudaq::ptsbe::requireImportanceBatchSimulator(simulator);
+  auto execution = importanceSimulator.sampleWithPTSBEImportance(
+      batch, cudaq::ptsbe::buildImportanceExecutionRequest(batch));
+  const auto allocationStart = std::chrono::steady_clock::now();
+  auto allocated =
+      execution.unitWeightHistogram
+          ? std::move(*execution.unitWeightHistogram)
+          : allocateCounts(execution.bins, batch.totalShots(),
+                           experiment.config.resampler, experiment.seed);
+  const auto allocatedTotal = std::accumulate(
+      allocated.begin(), allocated.end(), std::uint64_t{0},
+      [](std::uint64_t total, const CountBin &bin) {
+        if (bin.count > std::numeric_limits<std::uint64_t>::max() - total)
+          throw std::invalid_argument("importance count total would overflow");
+        return total + bin.count;
+      });
+  if (allocatedTotal != batch.totalShots())
+    throw std::runtime_error(
+        "importance final allocation did not conserve requested shots");
+  execution.diagnostics.allocationSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                    allocationStart)
+          .count();
+
+  cudaq::CountsDictionary counts;
+  for (const auto &bin : allocated)
+    counts[bin.record] = bin.count;
+  cudaq::ExecutionResult ordinaryResult{std::move(counts)};
+  if (batch.includeSequentialData)
+    ordinaryResult.sequentialData =
+        makeSequentialData(allocated, experiment.seed);
+
+  cudaq::info(
+      "[ptsbe] importance executor diagnostics: proposal draws {}, state "
+      "segments {}, clones {}, waves {}, zero-weight paths {}, represented "
+      "particles {}, log sum weights {}, log sum squared weights {}, ESS {}, "
+      "proposal {} s, replay {} s, checkpoints {} s, aggregation {} s, "
+      "allocation {} s",
+      execution.diagnostics.proposalDraws,
+      execution.diagnostics.executedStateSegments, execution.diagnostics.clones,
+      execution.diagnostics.waves, execution.diagnostics.zeroWeightPaths,
+      execution.diagnostics.representedParticles,
+      execution.diagnostics.logSumWeights,
+      execution.diagnostics.logSumSquaredWeights,
+      execution.diagnostics.effectiveSampleSize,
+      execution.diagnostics.proposalSeconds,
+      execution.diagnostics.replaySeconds,
+      execution.diagnostics.checkpointSeconds,
+      execution.diagnostics.aggregationSeconds,
+      execution.diagnostics.allocationSeconds);
+  return cudaq::sample_result{std::move(ordinaryResult)};
+}
+
 ptsbe::sample_result finalizePTSBE(const cudaq::ptsbe::sample_policy &policy) {
   if (!policy.batch)
     throw std::runtime_error(
         "ptsbe::sample_policy has no PTSBatch attached. PTSBE cannot be "
         "finalized by name-only dispatch.");
+
+  if (policy.batch->importanceExperiment &&
+      policy.batch->importanceExperiment->config.mode ==
+          NonUnitaryMode::Importance) {
+    auto *simulator = dynamic_cast<cudaq::ptsbe::BatchSimulator *>(
+        nvqir::getCircuitSimulatorInternal());
+    if (!simulator)
+      throw std::runtime_error(
+          "The selected simulator does not implement the PTSBE batch "
+          "interface required by importance mode.");
+    auto ordinary = finalizeImportancePTSBE(*simulator, *policy.batch);
+    policy.perTrajectoryResults.clear();
+    return ptsbe::sample_result(std::move(ordinary));
+  }
 
   auto results = samplePTSBE(*policy.batch);
   auto aggregated = aggregateResults(results);

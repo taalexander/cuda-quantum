@@ -144,3 +144,59 @@ def test_three_qubit_amplitude_damping_matches_density_matrix():
         p_reference = reference.get(bits, 0) / shots
         assert abs(p_ptsbe - p_reference) < tolerance, (
             f"{bits}: ptsbe={p_ptsbe:.4f} reference={p_reference:.4f}")
+
+
+@requires_gpu_cusvsim
+def test_importance_public_result_and_count_contract(monkeypatch):
+    cudaq.set_target("nvidia", option="fp64")
+    cudaq.set_random_seed(20260710)
+    shots = 512
+    noise = amplitude_damping_on_x(0.2)
+
+    monkeypatch.setenv("CUDAQ_PTSBE_NONUNITARY_MODE", "frontier")
+    exact = cudaq.ptsbe.sample(x_kernel,
+                               shots_count=shots,
+                               noise_model=noise,
+                               allow_non_unitary=True,
+                               max_live_states=64,
+                               max_shots_per_path=0)
+
+    monkeypatch.setenv("CUDAQ_PTSBE_NONUNITARY_MODE", "importance")
+    monkeypatch.setenv("CUDAQ_PTSBE_IMPORTANCE_NORMALIZATION", "site")
+    monkeypatch.setenv("CUDAQ_PTSBE_IMPORTANCE_RESAMPLER",
+                       "residual_stratified")
+    candidate = cudaq.ptsbe.sample(x_kernel,
+                                   shots_count=shots,
+                                   noise_model=noise,
+                                   allow_non_unitary=True,
+                                   max_live_states=64)
+    sequential = cudaq.ptsbe.sample(x_kernel,
+                                    shots_count=shots,
+                                    noise_model=noise,
+                                    allow_non_unitary=True,
+                                    max_live_states=64,
+                                    include_sequential_data=True)
+
+    assert type(candidate) is type(exact)
+    assert candidate.get_total_shots() == shots
+    assert all(
+        isinstance(candidate.count(bits), int) and candidate.count(bits) >= 0
+        for bits in candidate)
+    assert candidate.get_sequential_data() == []
+    records = sequential.get_sequential_data()
+    assert len(records) == shots
+    histogram = {}
+    for record in records:
+        histogram[record] = histogram.get(record, 0) + 1
+    assert histogram == {bits: sequential.count(bits) for bits in sequential}
+
+
+def test_importance_rejects_execution_data_before_dispatch(monkeypatch):
+    monkeypatch.setenv("CUDAQ_PTSBE_NONUNITARY_MODE", "importance")
+    with pytest.raises(RuntimeError, match="return_execution_data"):
+        cudaq.ptsbe.sample(x_kernel,
+                           shots_count=8,
+                           noise_model=amplitude_damping_on_x(0.2),
+                           allow_non_unitary=True,
+                           max_live_states=4,
+                           return_execution_data=True)

@@ -15,11 +15,16 @@
 #include "cudaq/ptsbe/policy.h"
 #include "cudaq/qis/execution_manager.h"
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace cudaq::ptsbe {
+
+namespace detail {
+struct ImportanceExperimentState;
+}
 
 /// @brief Batch specification for PTSBE execution
 struct PTSBatch {
@@ -70,6 +75,10 @@ struct PTSBatch {
   /// unitary noise stays pre-sampled and every existing path is byte-identical.
   bool unitaryNoiseAsBranch = false;
 
+  /// Opaque environment-derived experiment state. Null for the public exact
+  /// frontier path; its definition is intentionally not installed.
+  std::shared_ptr<const detail::ImportanceExperimentState> importanceExperiment;
+
   /// @brief Calculate total shots across all trajectories
   std::size_t totalShots() const;
 
@@ -117,6 +126,9 @@ aggregateResults(std::vector<cudaq::sample_result> &&results);
 /// @throws std::runtime_error if simulator cast fails or contract violated
 std::vector<cudaq::sample_result> samplePTSBE(const PTSBatch &batch);
 
+/// Reject an unsupported importance backend before state allocation.
+void validatePTSBEBackendSupport(const PTSBatch &batch);
+
 /// @brief Finalize a PTSBE execution for the given policy
 ///
 /// @param policy Policy carrying the PTSBatch to execute
@@ -137,6 +149,7 @@ void releaseBatchQubits(std::size_t nQubits);
 ///         the policy
 inline ptsbe::sample_result
 executeBatch(const cudaq::ptsbe::sample_policy &policy) {
+  validatePTSBEBackendSupport(*policy.batch);
   const auto nQubits = numQubits(policy.batch->trace);
 
   cudaq::ExecutionContext ctx(cudaq::ptsbe::sample_policy::name,

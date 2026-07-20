@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "ImportanceSampling.h"
 #include "KrausTrajectory.h"
 #include "PTSBEExecutionData.h"
 #include "PTSBESampler.h"
@@ -24,6 +25,7 @@
 #include "nvqir/CircuitSimulator.h"
 #include "nvqir/Gates.h"
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -46,9 +48,63 @@ struct BatchSimulator {
   sampleWithPTSBE(const PTSBatch &batch) = 0;
 };
 
+struct ImportanceKrausProposal {
+  std::size_t traceSite = 0;
+  std::vector<double> probabilities;
+  std::vector<std::size_t> originalBranchIndices;
+};
+
+struct ImportanceExecutionRequest {
+  std::vector<ImportanceKrausProposal> krausProposals;
+  std::uint64_t seed = 0;
+  std::size_t capacity = 0;
+  detail::ImportanceNormalization normalization =
+      detail::ImportanceNormalization::Site;
+  std::size_t checkpointSites = 16;
+  detail::NonUnitaryMode mode = detail::NonUnitaryMode::Importance;
+};
+
+struct ImportanceExecutionDiagnostics {
+  std::uint64_t proposalDraws = 0;
+  std::uint64_t representedParticles = 0;
+  std::uint64_t executedStateSegments = 0;
+  std::uint64_t clones = 0;
+  std::uint64_t waves = 0;
+  std::uint64_t zeroWeightPaths = 0;
+  double proposalSeconds = 0.0;
+  double replaySeconds = 0.0;
+  double checkpointSeconds = 0.0;
+  double aggregationSeconds = 0.0;
+  double allocationSeconds = 0.0;
+  double logSumWeights = 0.0;
+  double logSumSquaredWeights = 0.0;
+  double effectiveSampleSize = 0.0;
+};
+
+struct ImportanceExecutionResult {
+  std::vector<detail::LogMassBin> bins;
+  std::optional<std::vector<detail::CountBin>> unitWeightHistogram;
+  ImportanceExecutionDiagnostics diagnostics;
+};
+
+struct ImportanceBatchSimulator {
+  virtual ~ImportanceBatchSimulator() = default;
+  virtual ImportanceExecutionResult
+  sampleWithPTSBEImportance(const PTSBatch &batch,
+                            ImportanceExecutionRequest request) = 0;
+};
+
+ImportanceBatchSimulator &requireImportanceBatchSimulator(BatchSimulator &sim);
+
+ImportanceExecutionRequest
+buildImportanceExecutionRequest(const PTSBatch &batch);
+
 } // namespace cudaq::ptsbe
 
 namespace cudaq::ptsbe::detail {
+
+cudaq::sample_result finalizeImportancePTSBE(BatchSimulator &simulator,
+                                             const PTSBatch &batch);
 
 /// @brief Alias for CircuitSimulator gate task type
 template <typename ScalarType>
@@ -91,26 +147,37 @@ struct ReplayOp {
   std::optional<std::size_t> recordOffset;
   bool resetAfter = false;
   const cudaq::kraus_channel *channel = nullptr;
+  std::size_t traceSite = std::numeric_limits<std::size_t>::max();
 
-  explicit ReplayOp(const GateTask<ScalarType> *gateTask)
-      : kind(ReplayOpKind::Gate), task(gateTask) {}
+  explicit ReplayOp(
+      const GateTask<ScalarType> *gateTask,
+      std::size_t sourceTraceSite = std::numeric_limits<std::size_t>::max())
+      : kind(ReplayOpKind::Gate), task(gateTask), traceSite(sourceTraceSite) {}
 
-  ReplayOp(std::vector<std::size_t> qubits,
-           std::optional<std::size_t> recordOffset, bool resetAfter)
+  ReplayOp(
+      std::vector<std::size_t> qubits, std::optional<std::size_t> recordOffset,
+      bool resetAfter,
+      std::size_t sourceTraceSite = std::numeric_limits<std::size_t>::max())
       : kind(ReplayOpKind::Measure), qubits(std::move(qubits)),
-        recordOffset(recordOffset), resetAfter(resetAfter) {}
+        recordOffset(recordOffset), resetAfter(resetAfter),
+        traceSite(sourceTraceSite) {}
 
-  ReplayOp(const cudaq::kraus_channel *branchChannel,
-           std::vector<std::size_t> qubits)
+  ReplayOp(
+      const cudaq::kraus_channel *branchChannel,
+      std::vector<std::size_t> qubits,
+      std::size_t sourceTraceSite = std::numeric_limits<std::size_t>::max())
       : kind(ReplayOpKind::KrausBranch), qubits(std::move(qubits)),
-        channel(branchChannel) {}
+        channel(branchChannel), traceSite(sourceTraceSite) {}
 
   /// Tagged branch-site constructor. branchKind selects KrausBranch (general
   /// non-unitary) or UnitaryBranch (fixed-weight unitary mixture); both carry
   /// the same non-owning channel pointer and site qubits.
-  ReplayOp(const cudaq::kraus_channel *branchChannel,
-           std::vector<std::size_t> qubits, ReplayOpKind branchKind)
-      : kind(branchKind), qubits(std::move(qubits)), channel(branchChannel) {}
+  ReplayOp(
+      const cudaq::kraus_channel *branchChannel,
+      std::vector<std::size_t> qubits, ReplayOpKind branchKind,
+      std::size_t sourceTraceSite = std::numeric_limits<std::size_t>::max())
+      : kind(branchKind), qubits(std::move(qubits)), channel(branchChannel),
+        traceSite(sourceTraceSite) {}
 };
 
 /// @brief Site-ordered replay list for one trajectory.

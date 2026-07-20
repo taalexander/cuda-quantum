@@ -9,6 +9,8 @@
 #include "CUDAQTestUtils.h"
 #include "cudaq/ptsbe/PTSBESampler.h"
 #include "cudaq/ptsbe/PTSBESamplerImpl.h"
+#include <cmath>
+#include <map>
 #include <type_traits>
 
 using namespace cudaq;
@@ -35,12 +37,37 @@ struct MockBatchSimulator : ptsbe::BatchSimulator {
   }
 };
 
+struct MockImportanceBatchSimulator : ptsbe::BatchSimulator,
+                                      ptsbe::ImportanceBatchSimulator {
+  bool importanceCalled = false;
+  bool returnUnitWeightHistogram = false;
+
+  std::vector<cudaq::sample_result>
+  sampleWithPTSBE(const ptsbe::PTSBatch &) override {
+    return {};
+  }
+
+  ptsbe::ImportanceExecutionResult
+  sampleWithPTSBEImportance(const ptsbe::PTSBatch &,
+                            ptsbe::ImportanceExecutionRequest) override {
+    importanceCalled = true;
+    ptsbe::ImportanceExecutionResult result;
+    result.bins = {{"0", std::log(0.25)}, {"1", std::log(0.75)}};
+    if (returnUnitWeightHistogram)
+      result.unitWeightHistogram =
+          std::vector<ptsbe::detail::CountBin>{{"0", 3}, {"1", 7}};
+    return result;
+  }
+};
+
 struct NonPTSBESimulator {
   void execute(const ptsbe::PTSBatch &) {}
 };
 
 static_assert(std::is_base_of_v<ptsbe::BatchSimulator, MockBatchSimulator>);
 static_assert(!std::is_base_of_v<ptsbe::BatchSimulator, MockPTSBESimulator>);
+static_assert(std::is_base_of_v<ptsbe::ImportanceBatchSimulator,
+                                MockImportanceBatchSimulator>);
 
 } // namespace
 
@@ -57,6 +84,62 @@ CUDAQ_TEST(PTSBEInterfaceTest, PTSBatchWithTrajectories) {
 
   EXPECT_EQ(batch.trajectories.size(), 5);
   EXPECT_EQ(batch.trajectories[2].num_shots, 600);
+}
+
+CUDAQ_TEST(PTSBEInterfaceTest,
+           ImportanceFinalizerMaterializesOrdinaryExactCountResult) {
+  ptsbe::PTSBatch batch;
+  batch.trace = {{ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}}};
+  cudaq::KrausTrajectory root;
+  root.num_shots = 17;
+  batch.trajectories.push_back(root);
+  batch.includeSequentialData = true;
+  batch.maxLiveStates = 4;
+  batch.importanceExperiment =
+      std::make_shared<const ptsbe::detail::ImportanceExperimentState>(
+          ptsbe::detail::ImportanceExperimentState{
+              {.mode = ptsbe::detail::NonUnitaryMode::Importance,
+               .resampler = ptsbe::detail::FinalResampler::ResidualStratified},
+              20260703});
+
+  MockImportanceBatchSimulator simulator;
+  auto result = ptsbe::detail::finalizeImportancePTSBE(simulator, batch);
+
+  EXPECT_TRUE(simulator.importanceCalled);
+  EXPECT_EQ(result.get_total_shots(), 17u);
+  const auto sequential = result.sequential_data();
+  EXPECT_EQ(sequential.size(), 17u);
+  std::map<std::string, std::size_t> sequentialCounts;
+  for (const auto &record : sequential)
+    ++sequentialCounts[record];
+  const auto aggregateCounts = result.to_map();
+  ASSERT_EQ(sequentialCounts.size(), aggregateCounts.size());
+  for (const auto &[record, count] : sequentialCounts)
+    EXPECT_EQ(count, aggregateCounts.at(record));
+}
+
+CUDAQ_TEST(PTSBEInterfaceTest,
+           ImportanceFinalizerPreservesExactUnitWeightHistogram) {
+  ptsbe::PTSBatch batch;
+  batch.trace = {{ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}}};
+  cudaq::KrausTrajectory root;
+  root.num_shots = 10;
+  batch.trajectories.push_back(root);
+  batch.maxLiveStates = 4;
+  batch.importanceExperiment =
+      std::make_shared<const ptsbe::detail::ImportanceExperimentState>(
+          ptsbe::detail::ImportanceExperimentState{
+              {.mode = ptsbe::detail::NonUnitaryMode::Importance,
+               .resampler = ptsbe::detail::FinalResampler::Multinomial},
+              20260704});
+
+  MockImportanceBatchSimulator simulator;
+  simulator.returnUnitWeightHistogram = true;
+  const auto result = ptsbe::detail::finalizeImportancePTSBE(simulator, batch);
+
+  const auto counts = result.to_map();
+  EXPECT_EQ(counts.at("0"), 3u);
+  EXPECT_EQ(counts.at("1"), 7u);
 }
 
 /// Test: Trajectory with KrausSelection noise insertions
@@ -153,4 +236,14 @@ CUDAQ_TEST(PTSBEInterfaceTest, BatchSimulatorDispatchContract) {
       std::is_base_of_v<ptsbe::BatchSimulator, MockPTSBESimulator>;
   EXPECT_TRUE(mockBatchIsBatchSimulator);
   EXPECT_FALSE(mockPtsbeIsBatchSimulator);
+}
+
+CUDAQ_TEST(PTSBEInterfaceTest, OptionalImportanceInterfaceContract) {
+  MockBatchSimulator oldOnly;
+  EXPECT_THROW(ptsbe::requireImportanceBatchSimulator(oldOnly),
+               std::runtime_error);
+
+  MockImportanceBatchSimulator dual;
+  auto &selected = ptsbe::requireImportanceBatchSimulator(dual);
+  EXPECT_EQ(&selected, static_cast<ptsbe::ImportanceBatchSimulator *>(&dual));
 }

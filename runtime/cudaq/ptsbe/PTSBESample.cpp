@@ -7,9 +7,11 @@
  ******************************************************************************/
 
 #include "PTSBESample.h"
+#include "ImportanceSampling.h"
 #include "NoiseExtractor.h"
 #include "ShotAllocationStrategy.h"
 #include "strategies/ProbabilisticSamplingStrategy.h"
+#include "cudaq/algorithms/broadcast.h"
 #include "cudaq/algorithms/sample.h"
 #include "cudaq/runtime/logger/logger.h"
 #include "cudaq/simulators.h"
@@ -18,6 +20,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <numeric>
+#include <random>
 #include <span>
 #include <unordered_map>
 
@@ -364,6 +367,42 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
                                 std::size_t shots) {
   PTSBatch batch;
 
+  const auto experimentConfig = readImportanceExperimentConfig();
+  const bool candidateMode = experimentConfig.mode != NonUnitaryMode::Frontier;
+  if (candidateMode &&
+      (!options.max_live_states || *options.max_live_states < 2))
+    throw std::invalid_argument("PTSBE counted_wave and importance modes "
+                                "require explicit max_live_states >= 2.");
+  const auto envMaxShotsPerPath = maxShotsPerPathEnvOverride();
+  if (candidateMode &&
+      ((options.max_shots_per_path && *options.max_shots_per_path > 0) ||
+       (envMaxShotsPerPath && *envMaxShotsPerPath > 0)))
+    throw std::invalid_argument("PTSBE counted_wave and importance modes "
+                                "require max_shots_per_path=0.");
+  if (candidateMode && options.max_trajectories)
+    throw std::invalid_argument("PTSBE counted_wave and importance modes "
+                                "reject explicit max_trajectories.");
+  if (candidateMode && options.strategy)
+    throw std::invalid_argument("PTSBE counted_wave and importance modes "
+                                "reject custom trajectory strategies.");
+  if (candidateMode && (options.shot_allocation.type !=
+                            ShotAllocationStrategy::Type::PROPORTIONAL ||
+                        options.shot_allocation.bias_strength != 2.0 ||
+                        options.shot_allocation.seed))
+    throw std::invalid_argument("PTSBE counted_wave and importance modes "
+                                "require default shot allocation.");
+  if (experimentConfig.mode == NonUnitaryMode::Importance &&
+      options.return_execution_data)
+    throw std::invalid_argument(
+        "PTSBE importance mode does not support return_execution_data.");
+  if (candidateMode) {
+    const auto seed = cudaq::get_random_seed() != 0 ? cudaq::get_random_seed()
+                                                    : std::random_device{}();
+    batch.importanceExperiment =
+        std::make_shared<const ImportanceExperimentState>(
+            ImportanceExperimentState{experimentConfig, seed});
+  }
+
   const bool frontier = frontierConfigured(options.max_live_states);
   batch.maxLiveStates = options.max_live_states;
 
@@ -393,9 +432,9 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
   const bool reEvolutionForced =
       batch.hasMidCircuitMeasurement || nonUnitaryPresent;
   const bool branchWidthPermits = frontier && *options.max_live_states > 1;
-  batch.unitaryNoiseAsBranch = reEvolutionForced && branchWidthPermits;
+  batch.unitaryNoiseAsBranch =
+      candidateMode || (reEvolutionForced && branchWidthPermits);
 
-  auto envMaxShotsPerPath = maxShotsPerPathEnvOverride();
   if (envMaxShotsPerPath)
     cudaq::info("[ptsbe] max shots per path set to {} via "
                 "CUDAQ_PTSBE_MAX_SHOTS_PER_PATH",
@@ -406,7 +445,8 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
   // (unlimited, 0) so identical trajectory-and-syndrome histories merge into
   // one counted leaf; its Measure and branch splits divide that multiplicity.
   batch.maxShotsPerPath =
-      envMaxShotsPerPath.has_value()
+      candidateMode ? 0
+      : envMaxShotsPerPath.has_value()
           ? *envMaxShotsPerPath
           : options.max_shots_per_path.value_or(
                 (!batch.unitaryNoiseAsBranch &&
@@ -431,13 +471,15 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
     std::erase_if(sampledSites,
                   [](const NoisePoint &point) { return point.is_non_unitary; });
 
-  auto strategy = options.strategy
-                      ? options.strategy
-                      : std::make_shared<ProbabilisticSamplingStrategy>();
-  std::size_t maxTrajs = options.max_trajectories.value_or(shots);
-  cudaq::info("[ptsbe] Generating trajectories via {} strategy (max {})",
-              strategy->name(), maxTrajs);
-  batch.trajectories = strategy->generateTrajectories(sampledSites, maxTrajs);
+  if (!candidateMode) {
+    auto strategy = options.strategy
+                        ? options.strategy
+                        : std::make_shared<ProbabilisticSamplingStrategy>();
+    std::size_t maxTrajs = options.max_trajectories.value_or(shots);
+    cudaq::info("[ptsbe] Generating trajectories via {} strategy (max {})",
+                strategy->name(), maxTrajs);
+    batch.trajectories = strategy->generateTrajectories(sampledSites, maxTrajs);
+  }
 
   // A noise-free trace has no pre-sampled noise sites, so strategies produce
   // no trajectories. Execute it as one identity trajectory (probability 1,

@@ -206,6 +206,51 @@ def test_batched_gpu_named_mcm_layout_and_shape(named_mcm_kernel):
     assert np.all(arr[:, 1] == 1)
 
 
+@requires_gpu_cusvsim
+def test_importance_named_mcm_layout_and_order_match_exact(
+        named_mcm_kernel, monkeypatch):
+    cudaq.set_target("nvidia", option="fp64")
+    cudaq.set_random_seed(20260711)
+    shots = 256
+    noise = cudaq.NoiseModel()
+    noise.add_all_qubit_channel("x", cudaq.AmplitudeDampingChannel(0.2))
+
+    monkeypatch.setenv("CUDAQ_PTSBE_NONUNITARY_MODE", "frontier")
+    exact = cudaq.ptsbe.sample(named_mcm_kernel,
+                               shots_count=shots,
+                               noise_model=noise,
+                               allow_non_unitary=True,
+                               max_live_states=64,
+                               max_shots_per_path=0,
+                               include_sequential_data=True)
+
+    monkeypatch.setenv("CUDAQ_PTSBE_NONUNITARY_MODE", "importance")
+    candidate = cudaq.ptsbe.sample(named_mcm_kernel,
+                                   shots_count=shots,
+                                   noise_model=noise,
+                                   allow_non_unitary=True,
+                                   max_live_states=64,
+                                   include_sequential_data=True)
+
+    assert type(candidate) is type(exact)
+    assert layout_tuples(candidate) == layout_tuples(exact)
+    assert len(candidate.record_layout) == 3
+    assert candidate.record_layout[0].register_name == "s"
+    assert candidate.record_layout[0].resets is True
+    assert candidate.get_total_shots() == shots
+    records = candidate.get_sequential_data()
+    assert len(records) == shots
+    assert all(
+        len(record) == len(candidate.record_layout) for record in records)
+    # q1 is never prepared or targeted by noise. Its terminal column is the
+    # third full-record bit, so a terminal/MCM column permutation is observable.
+    assert all(record[2] == "0" for record in records)
+    histogram = {}
+    for record in records:
+        histogram[record] = histogram.get(record, 0) + 1
+    assert histogram == {bits: candidate.count(bits) for bits in candidate}
+
+
 def test_no_named_register_warning(named_mcm_kernel, capfd):
     # Named measurements become record-site names; producing records must
     # not emit the "named measurement results" stderr warning.

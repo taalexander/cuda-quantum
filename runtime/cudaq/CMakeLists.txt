@@ -33,6 +33,7 @@ add_library(${LIBRARY_NAME}
     utils/cudaq_utils.cpp
     distributed/mpi_plugin.cpp
     ptsbe/PTSBEExecutionData.cpp
+    ptsbe/ImportanceSampling.cpp
     ptsbe/PTSBESample.cpp
     ptsbe/PTSBESampleResult.cpp
     ptsbe/PTSBESampler.cpp

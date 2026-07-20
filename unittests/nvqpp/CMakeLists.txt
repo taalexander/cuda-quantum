@@ -340,6 +340,7 @@ target_link_libraries(test_photonics
 cudaq_gtest_discover_tests(test_photonics PROPERTIES PROCESSORS ${CUDAQ_TEST_OMP_SLOTS} DISCOVERY_TIMEOUT 120)
 
 add_executable(test_ptsbe ${CUDAQ_GTEST_MAIN}
+  ptsbe/ImportanceSamplingTester.cpp
   ptsbe/KrausSelectionTester.cpp
   ptsbe/KrausTrajectoryTester.cpp
   ptsbe/ShotAllocationTester.cpp
