@@ -12,6 +12,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -64,6 +65,7 @@ struct WeightDiagnostics {
   double logSumWeights = 0.0;
   double logSumSquaredWeights = 0.0;
   double effectiveSampleSize = 0.0;
+  double maximumNormalizedWeight = 0.0;
 };
 
 enum class FinalResampler { Multinomial, Residual, ResidualStratified };
@@ -77,6 +79,7 @@ struct ImportanceExperimentConfig {
   ImportanceNormalization normalization = ImportanceNormalization::Site;
   FinalResampler resampler = FinalResampler::ResidualStratified;
   std::size_t checkpointSites = 16;
+  std::optional<std::size_t> proposalParticles;
 };
 
 struct ImportanceExperimentState {

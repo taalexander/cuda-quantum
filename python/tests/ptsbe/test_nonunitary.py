@@ -23,6 +23,29 @@ def x_kernel():
 
 
 @cudaq.kernel
+def zero_damping_kernel():
+    q = cudaq.qvector(1)
+    cudaq.apply_noise(cudaq.AmplitudeDampingChannel, 0.2, q[0])
+    mz(q)
+
+
+@cudaq.kernel
+def one_damping_kernel():
+    q = cudaq.qvector(1)
+    x(q[0])
+    cudaq.apply_noise(cudaq.AmplitudeDampingChannel, 0.2, q[0])
+    mz(q)
+
+
+@cudaq.kernel
+def plus_damping_kernel():
+    q = cudaq.qvector(1)
+    h(q[0])
+    cudaq.apply_noise(cudaq.AmplitudeDampingChannel, 0.2, q[0])
+    mz(q)
+
+
+@cudaq.kernel
 def three_qubit_x_kernel():
     q = cudaq.qvector(3)
     x(q[0])
@@ -189,6 +212,38 @@ def test_importance_public_result_and_count_contract(monkeypatch):
     for record in records:
         histogram[record] = histogram.get(record, 0) + 1
     assert histogram == {bits: sequential.count(bits) for bits in sequential}
+
+
+@requires_gpu_cusvsim
+@pytest.mark.parametrize(
+    "kernel,expected_one",
+    [
+        (zero_damping_kernel, 0.0),
+        (one_damping_kernel, 0.8),
+        (plus_damping_kernel, 0.4),
+    ],
+)
+def test_compressed_importance_amplitude_damping_states(kernel, expected_one,
+                                                        monkeypatch):
+    cudaq.set_target("nvidia", option="fp64")
+    cudaq.set_random_seed(20260720)
+    shots = 4096
+    proposals = 512
+
+    monkeypatch.setenv("CUDAQ_PTSBE_NONUNITARY_MODE", "importance")
+    monkeypatch.setenv("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS", str(proposals))
+    monkeypatch.setenv("CUDAQ_PTSBE_IMPORTANCE_NORMALIZATION", "site")
+    monkeypatch.setenv("CUDAQ_PTSBE_IMPORTANCE_RESAMPLER",
+                       "residual_stratified")
+    result = cudaq.ptsbe.sample(kernel,
+                                shots_count=shots,
+                                allow_non_unitary=True,
+                                max_live_states=128)
+
+    assert result.get_total_shots() == shots
+    tolerance = 6.0 * math.sqrt(
+        max(expected_one * (1.0 - expected_one), 1.0 / proposals) / proposals)
+    assert abs(probability(result, "1") - expected_one) < tolerance
 
 
 def test_importance_rejects_execution_data_before_dispatch(monkeypatch):

@@ -369,6 +369,10 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
 
   const auto experimentConfig = readImportanceExperimentConfig();
   const bool candidateMode = experimentConfig.mode != NonUnitaryMode::Frontier;
+  if (candidateMode && experimentConfig.proposalParticles &&
+      *experimentConfig.proposalParticles > shots)
+    throw std::invalid_argument(
+        "CUDAQ_PTSBE_IMPORTANCE_PROPOSALS must not exceed shots_count");
   if (candidateMode &&
       (!options.max_live_states || *options.max_live_states < 2))
     throw std::invalid_argument("PTSBE counted_wave and importance modes "
@@ -391,10 +395,15 @@ PTSBatch buildPTSBatchFromTrace(PTSBETrace &&trace, const PTSBEOptions &options,
                         options.shot_allocation.seed))
     throw std::invalid_argument("PTSBE counted_wave and importance modes "
                                 "require default shot allocation.");
-  if (experimentConfig.mode == NonUnitaryMode::Importance &&
+  const bool budgetedCountedWave =
+      experimentConfig.mode == NonUnitaryMode::CountedWave &&
+      experimentConfig.proposalParticles.has_value();
+  if ((experimentConfig.mode == NonUnitaryMode::Importance ||
+       budgetedCountedWave) &&
       options.return_execution_data)
     throw std::invalid_argument(
-        "PTSBE importance mode does not support return_execution_data.");
+        "PTSBE importance and budgeted counted-wave modes do not support "
+        "return_execution_data.");
   if (candidateMode) {
     const auto seed = cudaq::get_random_seed() != 0 ? cudaq::get_random_seed()
                                                     : std::random_device{}();

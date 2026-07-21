@@ -43,6 +43,26 @@ struct ScopedNonUnitaryMode {
   }
 };
 
+struct ScopedProposalParticles {
+  std::optional<std::string> previous;
+
+  explicit ScopedProposalParticles(const char *value) {
+    if (const auto *oldValue = std::getenv("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS"))
+      previous = oldValue;
+    if (value)
+      setenv("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS", value, 1);
+    else
+      unsetenv("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS");
+  }
+
+  ~ScopedProposalParticles() {
+    if (previous)
+      setenv("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS", previous->c_str(), 1);
+    else
+      unsetenv("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS");
+  }
+};
+
 struct ScopedCudaqSeed {
   std::size_t previous;
 
@@ -128,6 +148,7 @@ TEST(FrontierConfigTest, ImportanceRequestOwnsValidatedProposalData) {
   const auto request = buildImportanceExecutionRequest(batch);
   EXPECT_EQ(request.seed, 20260709);
   EXPECT_EQ(request.capacity, 8);
+  EXPECT_EQ(request.proposalParticles, 17);
   EXPECT_EQ(request.mode, detail::NonUnitaryMode::Importance);
   ASSERT_EQ(request.krausProposals.size(), 1);
   EXPECT_EQ(request.krausProposals[0].originalBranchIndices,
@@ -138,12 +159,94 @@ TEST(FrontierConfigTest, ImportanceRequestOwnsValidatedProposalData) {
   EXPECT_EQ(request.krausProposals[0].probabilities.size(), 2);
 }
 
+TEST(FrontierConfigTest, ProposalBudgetDefaultsToReturnedCount) {
+  ScopedNonUnitaryMode mode("importance");
+  ScopedProposalParticles proposals(nullptr);
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 8;
+
+  const auto batch = buildBatch(amplitudeDampingOnH(), options, 17);
+  const auto request = buildImportanceExecutionRequest(batch);
+
+  EXPECT_EQ(batch.totalShots(), 17);
+  EXPECT_EQ(request.proposalParticles, 17);
+}
+
+TEST(FrontierConfigTest, ProposalBudgetAcceptsOneAndReturnedCount) {
+  ScopedNonUnitaryMode mode("importance");
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 8;
+
+  for (const auto *value : {"1", "17"}) {
+    ScopedProposalParticles proposals(value);
+    const auto batch = buildBatch(amplitudeDampingOnH(), options, 17);
+    const auto request = buildImportanceExecutionRequest(batch);
+    EXPECT_EQ(request.proposalParticles,
+              static_cast<std::size_t>(std::stoull(value)));
+    EXPECT_EQ(batch.totalShots(), 17);
+  }
+}
+
+TEST(FrontierConfigTest, ProposalBudgetRejectsReturnedCountOverflow) {
+  ScopedNonUnitaryMode mode("importance");
+  ScopedProposalParticles proposals("18");
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 8;
+
+  EXPECT_THROW(buildBatch(amplitudeDampingOnH(), options, 17),
+               std::invalid_argument);
+}
+
+TEST(FrontierConfigTest, BudgetedCountedWaveOwnsRequestWithoutProposals) {
+  ScopedNonUnitaryMode mode("counted_wave");
+  ScopedProposalParticles proposals("7");
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 4;
+
+  const auto batch = buildBatch(amplitudeDampingOnH(), options, 33);
+  const auto request = buildImportanceExecutionRequest(batch);
+
+  EXPECT_EQ(batch.totalShots(), 33);
+  EXPECT_EQ(request.proposalParticles, 7);
+  EXPECT_EQ(request.capacity, 4);
+  EXPECT_EQ(request.mode, detail::NonUnitaryMode::CountedWave);
+  EXPECT_TRUE(request.krausProposals.empty());
+}
+
+TEST(FrontierConfigTest, ExactCountedWaveDoesNotUseOptionalRequest) {
+  ScopedNonUnitaryMode mode("counted_wave");
+  ScopedProposalParticles proposals(nullptr);
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 4;
+
+  const auto batch = buildBatch(amplitudeDampingOnH(), options, 33);
+
+  EXPECT_THROW(buildImportanceExecutionRequest(batch), std::invalid_argument);
+}
+
 TEST(FrontierConfigTest, ImportanceRejectsUnsupportedBackendInPreflight) {
   PTSBatch batch;
   batch.importanceExperiment =
       std::make_shared<const detail::ImportanceExperimentState>(
           detail::ImportanceExperimentState{
               {.mode = detail::NonUnitaryMode::Importance}, 20260709});
+  EXPECT_THROW(detail::validatePTSBEBackendSupport(batch), std::runtime_error);
+}
+
+TEST(FrontierConfigTest,
+     BudgetedCountedWaveRejectsUnsupportedBackendInPreflight) {
+  PTSBatch batch;
+  batch.importanceExperiment =
+      std::make_shared<const detail::ImportanceExperimentState>(
+          detail::ImportanceExperimentState{
+              {.mode = detail::NonUnitaryMode::CountedWave,
+               .proposalParticles = 8},
+              20260720});
   EXPECT_THROW(detail::validatePTSBEBackendSupport(batch), std::runtime_error);
 }
 
@@ -212,6 +315,36 @@ TEST(FrontierConfigTest, ImportanceRejectsPopulationChangingOptions) {
   executionData.return_execution_data = true;
   EXPECT_THROW(buildBatch(amplitudeDampingOnH(), executionData, 16),
                std::invalid_argument);
+}
+
+TEST(FrontierConfigTest, BudgetedCountedWaveRejectsExecutionData) {
+  ScopedNonUnitaryMode mode("counted_wave");
+  ScopedProposalParticles proposals("8");
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 8;
+  options.return_execution_data = true;
+
+  EXPECT_THROW(buildBatch(amplitudeDampingOnH(), options, 16),
+               std::invalid_argument);
+}
+
+TEST(FrontierConfigTest, ExactCountedWaveAcceptsExecutionData) {
+  ScopedNonUnitaryMode mode("counted_wave");
+  ScopedProposalParticles proposals(nullptr);
+  PTSBEOptions options;
+  options.allow_non_unitary = true;
+  options.max_live_states = 8;
+  options.return_execution_data = true;
+
+  const auto batch = buildBatch(amplitudeDampingOnH(), options, 16);
+
+  ASSERT_TRUE(batch.importanceExperiment);
+  EXPECT_FALSE(batch.importanceExperiment->config.proposalParticles);
+  EXPECT_EQ(batch.importanceExperiment->config.mode,
+            detail::NonUnitaryMode::CountedWave);
+  ASSERT_EQ(batch.trajectories.size(), 1);
+  EXPECT_EQ(batch.trajectories[0].num_shots, 16);
 }
 
 TEST(FrontierConfigTest, KnobsUnsetKeepTerminalBehavior) {

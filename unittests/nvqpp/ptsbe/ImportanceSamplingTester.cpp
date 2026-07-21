@@ -70,11 +70,13 @@ CUDAQ_TEST(ImportanceConfigTest, DefaultsSelectExactFrontier) {
   ScopedEnvVar normalization("CUDAQ_PTSBE_IMPORTANCE_NORMALIZATION", nullptr);
   ScopedEnvVar resampler("CUDAQ_PTSBE_IMPORTANCE_RESAMPLER", nullptr);
   ScopedEnvVar checkpoint("CUDAQ_PTSBE_IMPORTANCE_CHECKPOINT_SITES", nullptr);
+  ScopedEnvVar proposals("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS", nullptr);
   const auto config = readImportanceExperimentConfig();
   EXPECT_EQ(config.mode, NonUnitaryMode::Frontier);
   EXPECT_EQ(config.normalization, ImportanceNormalization::Site);
   EXPECT_EQ(config.resampler, FinalResampler::ResidualStratified);
   EXPECT_EQ(config.checkpointSites, 16);
+  EXPECT_FALSE(config.proposalParticles.has_value());
 }
 
 CUDAQ_TEST(ImportanceConfigTest, ParsesEveryBranchLocalControl) {
@@ -103,6 +105,11 @@ CUDAQ_TEST(ImportanceConfigTest, ParsesEveryBranchLocalControl) {
     ScopedEnvVar variable("CUDAQ_PTSBE_IMPORTANCE_CHECKPOINT_SITES", "31");
     EXPECT_EQ(readImportanceExperimentConfig().checkpointSites, 31);
   }
+  for (const auto *value : {"1", "257"}) {
+    ScopedEnvVar variable("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS", value);
+    EXPECT_EQ(readImportanceExperimentConfig().proposalParticles,
+              static_cast<std::size_t>(std::stoull(value)));
+  }
 }
 
 CUDAQ_TEST(ImportanceConfigTest, RejectsInvalidControlValues) {
@@ -121,6 +128,12 @@ CUDAQ_TEST(ImportanceConfigTest, RejectsInvalidControlValues) {
   {
     ScopedEnvVar variable("CUDAQ_PTSBE_IMPORTANCE_CHECKPOINT_SITES", "0");
     EXPECT_THROW(readImportanceExperimentConfig(), std::invalid_argument);
+  }
+  for (const auto *value :
+       {"", "0", "-1", "1.5", "not-a-number", "184467440737095516160"}) {
+    ScopedEnvVar variable("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS", value);
+    EXPECT_THROW(readImportanceExperimentConfig(), std::invalid_argument)
+        << "value=" << value;
   }
 }
 
@@ -340,6 +353,7 @@ CUDAQ_TEST(ImportancePopulationTest, EssUsesPerParticleMultiplicity) {
   EXPECT_NEAR(std::exp(diagnostics.logSumWeights), 8.0, 1e-14);
   EXPECT_NEAR(std::exp(diagnostics.logSumSquaredWeights), 14.0, 1e-14);
   EXPECT_NEAR(diagnostics.effectiveSampleSize, 64.0 / 14.0, 1e-14);
+  EXPECT_NEAR(diagnostics.maximumNormalizedWeight, 0.25, 1e-14);
 }
 
 CUDAQ_TEST(ImportancePopulationTest, EssIsInvariantToLargeCommonLogShift) {
@@ -347,6 +361,10 @@ CUDAQ_TEST(ImportancePopulationTest, EssIsInvariantToLargeCommonLogShift) {
   const std::vector<WeightedRecord> shifted = {{"0", 1, 1e16}, {"1", 1, 1e16}};
   EXPECT_DOUBLE_EQ(computeWeightDiagnostics(baseline).effectiveSampleSize, 2.0);
   EXPECT_DOUBLE_EQ(computeWeightDiagnostics(shifted).effectiveSampleSize, 2.0);
+  EXPECT_DOUBLE_EQ(computeWeightDiagnostics(baseline).maximumNormalizedWeight,
+                   0.5);
+  EXPECT_DOUBLE_EQ(computeWeightDiagnostics(shifted).maximumNormalizedWeight,
+                   0.5);
 }
 
 CUDAQ_TEST(ImportancePopulationTest, RejectsOutOfRangeLogDiagnostics) {

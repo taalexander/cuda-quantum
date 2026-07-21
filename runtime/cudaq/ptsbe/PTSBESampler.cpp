@@ -19,6 +19,15 @@
 #include <span>
 #include <stdexcept>
 
+static bool usesProposalExecution(const cudaq::ptsbe::PTSBatch &batch) {
+  if (!batch.importanceExperiment)
+    return false;
+  const auto &config = batch.importanceExperiment->config;
+  return config.mode == cudaq::ptsbe::detail::NonUnitaryMode::Importance ||
+         (config.mode == cudaq::ptsbe::detail::NonUnitaryMode::CountedWave &&
+          config.proposalParticles.has_value());
+}
+
 cudaq::ptsbe::ImportanceBatchSimulator &
 cudaq::ptsbe::requireImportanceBatchSimulator(BatchSimulator &sim) {
   if (auto *importance = dynamic_cast<ImportanceBatchSimulator *>(&sim))
@@ -29,18 +38,24 @@ cudaq::ptsbe::requireImportanceBatchSimulator(BatchSimulator &sim) {
 
 cudaq::ptsbe::ImportanceExecutionRequest
 cudaq::ptsbe::buildImportanceExecutionRequest(const PTSBatch &batch) {
-  if (!batch.importanceExperiment ||
-      batch.importanceExperiment->config.mode !=
-          detail::NonUnitaryMode::Importance ||
-      !batch.maxLiveStates || *batch.maxLiveStates < 2)
-    throw std::invalid_argument("importance execution request requires an "
-                                "importance batch with capacity >= 2");
+  const bool importance =
+      batch.importanceExperiment && batch.importanceExperiment->config.mode ==
+                                        detail::NonUnitaryMode::Importance;
+  if (!usesProposalExecution(batch) || !batch.maxLiveStates ||
+      *batch.maxLiveStates < 2)
+    throw std::invalid_argument("optional proposal execution request requires "
+                                "a budgeted batch with capacity >= 2");
   ImportanceExecutionRequest request;
   request.seed = batch.importanceExperiment->seed;
+  request.proposalParticles =
+      batch.importanceExperiment->config.proposalParticles.value_or(
+          batch.totalShots());
   request.capacity = *batch.maxLiveStates;
   request.normalization = batch.importanceExperiment->config.normalization;
   request.checkpointSites = batch.importanceExperiment->config.checkpointSites;
   request.mode = batch.importanceExperiment->config.mode;
+  if (!importance)
+    return request;
   for (std::size_t traceSite = 0; traceSite < batch.trace.size(); ++traceSite) {
     const auto &instruction = batch.trace[traceSite];
     if (instruction.type != TraceInstructionType::Noise ||
@@ -491,36 +506,39 @@ std::vector<cudaq::sample_result> samplePTSBE(const PTSBatch &batch) {
 }
 
 void validatePTSBEBackendSupport(const PTSBatch &batch) {
-  if (!batch.importanceExperiment ||
-      batch.importanceExperiment->config.mode != NonUnitaryMode::Importance)
+  if (!usesProposalExecution(batch))
     return;
   if (cudaq::getEnvBool("CUDAQ_PTSBE_FORCE_GENERIC", false))
     throw std::runtime_error(
-        "PTSBE importance mode cannot use the generic simulator path.");
+        "PTSBE proposal execution cannot use the generic simulator path.");
   auto *baseSimulator = nvqir::getCircuitSimulatorInternal();
   auto *batchSimulator =
       dynamic_cast<cudaq::ptsbe::BatchSimulator *>(baseSimulator);
   if (!batchSimulator)
     throw std::runtime_error(
         "The selected simulator does not implement the PTSBE batch interface "
-        "required by importance mode.");
+        "required by proposal execution.");
   cudaq::ptsbe::requireImportanceBatchSimulator(*batchSimulator);
 }
 
 cudaq::sample_result finalizeImportancePTSBE(BatchSimulator &simulator,
                                              const PTSBatch &batch) {
-  if (!batch.importanceExperiment ||
-      batch.importanceExperiment->config.mode != NonUnitaryMode::Importance)
+  if (!usesProposalExecution(batch))
     throw std::invalid_argument(
-        "importance finalization requires opaque experiment state");
+        "proposal finalization requires opaque experiment state");
   const auto &experiment = *batch.importanceExperiment;
   auto &importanceSimulator =
       cudaq::ptsbe::requireImportanceBatchSimulator(simulator);
-  auto execution = importanceSimulator.sampleWithPTSBEImportance(
-      batch, cudaq::ptsbe::buildImportanceExecutionRequest(batch));
+  auto request = cudaq::ptsbe::buildImportanceExecutionRequest(batch);
+  const auto proposalParticles = request.proposalParticles;
+  auto execution =
+      importanceSimulator.sampleWithPTSBEImportance(batch, std::move(request));
+  if (execution.diagnostics.representedParticles != proposalParticles)
+    throw std::runtime_error(
+        "proposal executor did not conserve represented particles");
   const auto allocationStart = std::chrono::steady_clock::now();
   auto allocated =
-      execution.unitWeightHistogram
+      execution.unitWeightHistogram && proposalParticles == batch.totalShots()
           ? std::move(*execution.unitWeightHistogram)
           : allocateCounts(execution.bins, batch.totalShots(),
                            experiment.config.resampler, experiment.seed);
@@ -547,19 +565,28 @@ cudaq::sample_result finalizeImportancePTSBE(BatchSimulator &simulator,
     ordinaryResult.sequentialData =
         makeSequentialData(allocated, experiment.seed);
 
+  const auto proposalScale = static_cast<double>(proposalParticles);
+  const auto essOverM =
+      execution.diagnostics.effectiveSampleSize / proposalScale;
+  const auto sumWeightsOverM =
+      std::exp(execution.diagnostics.logSumWeights - std::log(proposalScale));
+  const auto weightCv = std::sqrt(std::max(
+      proposalScale / execution.diagnostics.effectiveSampleSize - 1.0, 0.0));
   cudaq::info(
       "[ptsbe] importance executor diagnostics: proposal draws {}, state "
       "segments {}, clones {}, waves {}, zero-weight paths {}, represented "
-      "particles {}, log sum weights {}, log sum squared weights {}, ESS {}, "
-      "proposal {} s, replay {} s, checkpoints {} s, aggregation {} s, "
-      "allocation {} s",
+      "particles {}, max live width {}, log sum weights {}, log sum squared "
+      "weights {}, ESS {}, ESS/M {}, sum weights/M {}, weight CV {}, max "
+      "normalized weight {}, proposal {} s, replay {} s, checkpoints {} s, "
+      "aggregation {} s, allocation {} s",
       execution.diagnostics.proposalDraws,
       execution.diagnostics.executedStateSegments, execution.diagnostics.clones,
       execution.diagnostics.waves, execution.diagnostics.zeroWeightPaths,
       execution.diagnostics.representedParticles,
-      execution.diagnostics.logSumWeights,
+      execution.diagnostics.maxLiveWidth, execution.diagnostics.logSumWeights,
       execution.diagnostics.logSumSquaredWeights,
-      execution.diagnostics.effectiveSampleSize,
+      execution.diagnostics.effectiveSampleSize, essOverM, sumWeightsOverM,
+      weightCv, execution.diagnostics.maximumNormalizedWeight,
       execution.diagnostics.proposalSeconds,
       execution.diagnostics.replaySeconds,
       execution.diagnostics.checkpointSeconds,
@@ -574,15 +601,13 @@ ptsbe::sample_result finalizePTSBE(const cudaq::ptsbe::sample_policy &policy) {
         "ptsbe::sample_policy has no PTSBatch attached. PTSBE cannot be "
         "finalized by name-only dispatch.");
 
-  if (policy.batch->importanceExperiment &&
-      policy.batch->importanceExperiment->config.mode ==
-          NonUnitaryMode::Importance) {
+  if (usesProposalExecution(*policy.batch)) {
     auto *simulator = dynamic_cast<cudaq::ptsbe::BatchSimulator *>(
         nvqir::getCircuitSimulatorInternal());
     if (!simulator)
       throw std::runtime_error(
           "The selected simulator does not implement the PTSBE batch "
-          "interface required by importance mode.");
+          "interface required by proposal execution.");
     auto ordinary = finalizeImportancePTSBE(*simulator, *policy.batch);
     policy.perTrajectoryResults.clear();
     return ptsbe::sample_result(std::move(ordinary));

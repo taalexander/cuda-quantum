@@ -57,6 +57,7 @@ struct ImportanceKrausProposal {
 struct ImportanceExecutionRequest {
   std::vector<ImportanceKrausProposal> krausProposals;
   std::uint64_t seed = 0;
+  std::size_t proposalParticles = 0;
   std::size_t capacity = 0;
   detail::ImportanceNormalization normalization =
       detail::ImportanceNormalization::Site;
@@ -71,6 +72,7 @@ struct ImportanceExecutionDiagnostics {
   std::uint64_t clones = 0;
   std::uint64_t waves = 0;
   std::uint64_t zeroWeightPaths = 0;
+  std::uint64_t maxLiveWidth = 0;
   double proposalSeconds = 0.0;
   double replaySeconds = 0.0;
   double checkpointSeconds = 0.0;
@@ -79,6 +81,7 @@ struct ImportanceExecutionDiagnostics {
   double logSumWeights = 0.0;
   double logSumSquaredWeights = 0.0;
   double effectiveSampleSize = 0.0;
+  double maximumNormalizedWeight = 0.0;
 };
 
 struct ImportanceExecutionResult {

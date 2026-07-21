@@ -41,17 +41,20 @@ struct MockImportanceBatchSimulator : ptsbe::BatchSimulator,
                                       ptsbe::ImportanceBatchSimulator {
   bool importanceCalled = false;
   bool returnUnitWeightHistogram = false;
+  bool returnCompressedUnitWeightHistogram = false;
   bool returnSparseWeightedBins = false;
+  std::optional<ptsbe::ImportanceExecutionRequest> lastRequest;
 
   std::vector<cudaq::sample_result>
   sampleWithPTSBE(const ptsbe::PTSBatch &) override {
     return {};
   }
 
-  ptsbe::ImportanceExecutionResult
-  sampleWithPTSBEImportance(const ptsbe::PTSBatch &,
-                            ptsbe::ImportanceExecutionRequest) override {
+  ptsbe::ImportanceExecutionResult sampleWithPTSBEImportance(
+      const ptsbe::PTSBatch &,
+      ptsbe::ImportanceExecutionRequest request) override {
     importanceCalled = true;
+    lastRequest = std::move(request);
     ptsbe::ImportanceExecutionResult result;
     result.bins =
         returnSparseWeightedBins
@@ -61,7 +64,15 @@ struct MockImportanceBatchSimulator : ptsbe::BatchSimulator,
                                                      {"1", std::log(0.75)}};
     if (returnUnitWeightHistogram)
       result.unitWeightHistogram =
-          std::vector<ptsbe::detail::CountBin>{{"0", 3}, {"1", 7}};
+          returnCompressedUnitWeightHistogram
+              ? std::vector<ptsbe::detail::CountBin>{{"0", 1}, {"1", 3}}
+              : std::vector<ptsbe::detail::CountBin>{{"0", 3}, {"1", 7}};
+    result.diagnostics.representedParticles = lastRequest->proposalParticles;
+    result.diagnostics.logSumWeights =
+        std::log(static_cast<double>(lastRequest->proposalParticles));
+    result.diagnostics.logSumSquaredWeights =
+        std::log(static_cast<double>(lastRequest->proposalParticles));
+    result.diagnostics.effectiveSampleSize = lastRequest->proposalParticles;
     return result;
   }
 };
@@ -90,6 +101,52 @@ CUDAQ_TEST(PTSBEInterfaceTest, PTSBatchWithTrajectories) {
 
   EXPECT_EQ(batch.trajectories.size(), 5);
   EXPECT_EQ(batch.trajectories[2].num_shots, 600);
+}
+
+CUDAQ_TEST(PTSBEInterfaceTest,
+           BudgetedCountedWaveAllocatesExactlyNForEveryResampler) {
+  for (const auto resampler :
+       {ptsbe::detail::FinalResampler::Multinomial,
+        ptsbe::detail::FinalResampler::Residual,
+        ptsbe::detail::FinalResampler::ResidualStratified}) {
+    ptsbe::PTSBatch batch;
+    batch.trace = {
+        {ptsbe::TraceInstructionType::Measurement, "mz", {0}, {}, {}}};
+    cudaq::KrausTrajectory root;
+    root.num_shots = 10;
+    batch.trajectories.push_back(root);
+    batch.includeSequentialData = true;
+    batch.maxLiveStates = 4;
+    batch.importanceExperiment =
+        std::make_shared<const ptsbe::detail::ImportanceExperimentState>(
+            ptsbe::detail::ImportanceExperimentState{
+                {.mode = ptsbe::detail::NonUnitaryMode::CountedWave,
+                 .resampler = resampler,
+                 .proposalParticles = 4},
+                20260720});
+
+    MockImportanceBatchSimulator simulator;
+    simulator.returnUnitWeightHistogram = true;
+    simulator.returnCompressedUnitWeightHistogram = true;
+    const auto result =
+        ptsbe::detail::finalizeImportancePTSBE(simulator, batch);
+
+    ASSERT_TRUE(simulator.lastRequest);
+    EXPECT_EQ(simulator.lastRequest->proposalParticles, 4);
+    EXPECT_EQ(simulator.lastRequest->mode,
+              ptsbe::detail::NonUnitaryMode::CountedWave);
+    EXPECT_TRUE(simulator.lastRequest->krausProposals.empty());
+    EXPECT_EQ(result.get_total_shots(), 10);
+    const auto sequential = result.sequential_data();
+    EXPECT_EQ(sequential.size(), 10);
+    std::map<std::string, std::size_t> sequentialCounts;
+    for (const auto &record : sequential)
+      ++sequentialCounts[record];
+    const auto aggregateCounts = result.to_map();
+    ASSERT_EQ(sequentialCounts.size(), aggregateCounts.size());
+    for (const auto &[record, count] : sequentialCounts)
+      EXPECT_EQ(count, aggregateCounts.at(record));
+  }
 }
 
 CUDAQ_TEST(PTSBEInterfaceTest, ImportanceFinalizerOmitsZeroCountRecords) {

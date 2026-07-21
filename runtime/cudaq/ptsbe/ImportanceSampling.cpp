@@ -277,17 +277,25 @@ cudaq::ptsbe::detail::computeWeightDiagnostics(
   if (maximumLogWeight > std::numeric_limits<double>::max() / 2.0)
     throw std::invalid_argument(
         "squared-weight log diagnostic exceeds FP64 range");
-  diagnostics.logSumWeights =
-      maximumLogWeight + std::log(static_cast<double>(scaledSum));
-  diagnostics.logSumSquaredWeights =
-      2.0 * maximumLogWeight + std::log(static_cast<double>(scaledSquaredSum));
+  const auto logSumWeights =
+      static_cast<long double>(maximumLogWeight) + std::log(scaledSum);
+  const auto logSumSquaredWeights =
+      2.0L * static_cast<long double>(maximumLogWeight) +
+      std::log(scaledSquaredSum);
+  diagnostics.logSumWeights = static_cast<double>(logSumWeights);
+  diagnostics.logSumSquaredWeights = static_cast<double>(logSumSquaredWeights);
   if (!std::isfinite(diagnostics.logSumWeights) ||
       !std::isfinite(diagnostics.logSumSquaredWeights))
     throw std::invalid_argument("weight log diagnostics exceed FP64 range");
   diagnostics.effectiveSampleSize =
       static_cast<double>(scaledSum * scaledSum / scaledSquaredSum);
+  diagnostics.maximumNormalizedWeight = static_cast<double>(1.0L / scaledSum);
   if (!std::isfinite(diagnostics.effectiveSampleSize))
     throw std::invalid_argument("effective sample size is not finite");
+  if (!std::isfinite(diagnostics.maximumNormalizedWeight) ||
+      diagnostics.maximumNormalizedWeight <= 0.0 ||
+      diagnostics.maximumNormalizedWeight > 1.0)
+    throw std::invalid_argument("maximum normalized weight is outside (0, 1]");
   return diagnostics;
 }
 
@@ -590,6 +598,16 @@ cudaq::ptsbe::detail::readImportanceExperimentConfig() {
       throw std::invalid_argument(
           "CUDAQ_PTSBE_IMPORTANCE_CHECKPOINT_SITES must be a positive integer");
     config.checkpointSites = parsed;
+  }
+  if (const auto *value = std::getenv("CUDAQ_PTSBE_IMPORTANCE_PROPOSALS")) {
+    std::size_t parsed = 0;
+    const std::string_view text(value);
+    const auto [end, error] =
+        std::from_chars(text.data(), text.data() + text.size(), parsed);
+    if (error != std::errc{} || end != text.data() + text.size() || parsed == 0)
+      throw std::invalid_argument(
+          "CUDAQ_PTSBE_IMPORTANCE_PROPOSALS must be a positive integer");
+    config.proposalParticles = parsed;
   }
   return config;
 }
