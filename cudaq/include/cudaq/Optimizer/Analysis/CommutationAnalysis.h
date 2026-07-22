@@ -8,8 +8,11 @@
 
 #pragma once
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
-#include <memory>
+#include "mlir/IR/Value.h"
+#include <cstdint>
+#include <utility>
 
 namespace mlir {
 class Block;
@@ -18,11 +21,12 @@ class Operation;
 
 namespace cudaq::quake::detail {
 
-/// The outcome of a structural commutation query.
+/// The outcome of a commutation query.
 enum class CommutationStatus { Commutes, DoesNotCommute, Indeterminate };
 
 /// The rule or limitation that produced a commutation status.
 enum class CommutationReason {
+  // Reasons paired with CommutationStatus::Commutes.
   /// The operations have disjoint block-local quantum support.
   DisjointSupport,
   /// The supported operations have the same action and placement, optionally
@@ -31,12 +35,11 @@ enum class CommutationReason {
   /// Both operations are diagonal in the computational basis.
   ComputationalDiagonal,
   /// Both operations rotate about the same axis. Rotation angles may differ;
-  /// `PhasedRx` additionally requires an exact phase match.
+  /// `PhasedRx` rotation angles may differ, but their axis-defining phase
+  /// parameters must be the same SSA value or equal constants.
   SameAxis,
   /// Pauli products have even anti-commutation parity on shared targets.
   EvenPauliParity,
-  /// Fixed Pauli products have odd anti-commutation parity on shared targets.
-  OddPauliParity,
   /// A diagonal operation overlaps the other operation only on controls.
   DiagonalOnControls,
   /// Controlled operations have commuting target actions and no target-control
@@ -45,6 +48,12 @@ enum class CommutationReason {
   /// Opposite polarity on a shared control makes the control predicates
   /// mutually exclusive.
   MutuallyExclusiveControls,
+
+  // Reasons paired with CommutationStatus::DoesNotCommute.
+  /// Fixed Pauli products have odd anti-commutation parity on shared targets.
+  OddPauliParity,
+
+  // Reasons paired with CommutationStatus::Indeterminate.
   /// At least one query operation is null.
   NullOperation,
   /// At least one operation is outside the analyzed block.
@@ -77,14 +86,23 @@ struct CommutationResult {
   }
 };
 
-/// Read-only structural commutation analysis for operations in one block.
+/// Read-only commutation analysis for operations in one block.
+///
+/// The analysis is primarily designed to prove when reordering is safe.
+/// `DoesNotCommute` is returned only for the limited cases where an available
+/// rule proves noncommutation. `Indeterminate` means that the available rules
+/// established neither result. It does not imply either commutation or
+/// noncommutation.
+///
+/// Compiler transformations must treat both `DoesNotCommute` and
+/// `Indeterminate` as not safe to reorder. The separate statuses preserve the
+/// distinction between proven noncommutation and the absence of a proof.
 ///
 /// Any mutation of the block invalidates the analysis instance. The caller
 /// must discard it before querying the changed block.
 class CommutationAnalysis {
 public:
   explicit CommutationAnalysis(mlir::Block &block);
-  ~CommutationAnalysis();
 
   CommutationAnalysis(const CommutationAnalysis &) = delete;
   CommutationAnalysis &operator=(const CommutationAnalysis &) = delete;
@@ -96,8 +114,11 @@ public:
   bool canCommute(mlir::Operation *lhs, mlir::Operation *rhs);
 
 private:
-  struct Impl;
-  std::unique_ptr<Impl> impl;
+  mlir::Block *block;
+  llvm::DenseMap<mlir::Value, std::uint32_t> identities;
+  llvm::DenseMap<std::pair<mlir::Operation *, mlir::Operation *>,
+                 CommutationResult>
+      cache;
 };
 
 } // namespace cudaq::quake::detail

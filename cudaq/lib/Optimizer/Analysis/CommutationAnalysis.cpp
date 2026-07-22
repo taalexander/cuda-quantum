@@ -333,34 +333,17 @@ static bool haveMutuallyExclusiveControls(const OperationView &lhs,
   return false;
 }
 
-struct CommutationAnalysis::Impl {
-  explicit Impl(Block &block);
-
-  CommutationResult evaluate(Operation *lhs, Operation *rhs);
-  std::optional<CommutationReason> getView(OperationView &view) const;
-  void buildIdentityMap();
-  void propagateOperatorIdentities(cudaq::quake::OperatorInterface op);
-  void propagateIdentity(Value input, Value result);
-
-  Block *block;
-  QuantumIdentity nextIdentity = 0;
-  llvm::DenseMap<Value, QuantumIdentity> identities;
-  llvm::DenseMap<BorrowKey, QuantumIdentity> borrowedIdentities;
-  llvm::DenseMap<OperationPair, CommutationResult> cache;
-};
-
-CommutationAnalysis::Impl::Impl(Block &block) : block(&block) {
-  buildIdentityMap();
-}
-
-void CommutationAnalysis::Impl::propagateIdentity(Value input, Value result) {
+static void
+propagateIdentity(llvm::DenseMap<Value, QuantumIdentity> &identities,
+                  Value input, Value result) {
   auto identity = identities.find(input);
   if (identity != identities.end())
     identities.try_emplace(result, identity->second);
 }
 
-void CommutationAnalysis::Impl::propagateOperatorIdentities(
-    cudaq::quake::OperatorInterface op) {
+static void
+propagateOperatorIdentities(llvm::DenseMap<Value, QuantumIdentity> &identities,
+                            cudaq::quake::OperatorInterface op) {
   llvm::SmallVector<Value> wireInputs;
   for (Value control : op.getControls())
     if (isa<cudaq::quake::WireType>(control.getType()))
@@ -376,15 +359,20 @@ void CommutationAnalysis::Impl::propagateOperatorIdentities(
       }))
     return;
   for (auto [input, result] : llvm::zip(wireInputs, wireResults))
-    propagateIdentity(input, result);
+    propagateIdentity(identities, input, result);
 }
 
-void CommutationAnalysis::Impl::buildIdentityMap() {
-  for (BlockArgument argument : block->getArguments())
+static void
+buildIdentityMap(Block &block,
+                 llvm::DenseMap<Value, QuantumIdentity> &identities) {
+  QuantumIdentity nextIdentity = 0;
+  llvm::DenseMap<BorrowKey, QuantumIdentity> borrowedIdentities;
+
+  for (BlockArgument argument : block.getArguments())
     if (isa<cudaq::quake::WireType>(argument.getType()))
       identities.try_emplace(argument, nextIdentity++);
 
-  for (Operation &operation : *block) {
+  for (Operation &operation : block) {
     if (auto nullWire = dyn_cast<cudaq::quake::NullWireOp>(operation)) {
       identities.try_emplace(nullWire.getResult(), nextIdentity++);
       continue;
@@ -399,21 +387,24 @@ void CommutationAnalysis::Impl::buildIdentityMap() {
       continue;
     }
     if (auto toControl = dyn_cast<cudaq::quake::ToControlOp>(operation)) {
-      propagateIdentity(toControl.getQubit(), toControl.getResult());
+      propagateIdentity(identities, toControl.getQubit(),
+                        toControl.getResult());
       continue;
     }
     if (auto fromControl = dyn_cast<cudaq::quake::FromControlOp>(operation)) {
-      propagateIdentity(fromControl.getCtrlbit(), fromControl.getResult());
+      propagateIdentity(identities, fromControl.getCtrlbit(),
+                        fromControl.getResult());
       continue;
     }
     if (auto operatorInterface =
             dyn_cast<cudaq::quake::OperatorInterface>(operation))
-      propagateOperatorIdentities(operatorInterface);
+      propagateOperatorIdentities(identities, operatorInterface);
   }
 }
 
-std::optional<CommutationReason>
-CommutationAnalysis::Impl::getView(OperationView &view) const {
+static std::optional<CommutationReason>
+getView(OperationView &view,
+        const llvm::DenseMap<Value, QuantumIdentity> &identities) {
   auto negatedControls = view.interface.getNegatedControls();
   auto controls = view.interface.getControls();
   if (negatedControls && negatedControls->size() != controls.size())
@@ -452,8 +443,9 @@ CommutationAnalysis::Impl::getView(OperationView &view) const {
   return std::nullopt;
 }
 
-CommutationResult CommutationAnalysis::Impl::evaluate(Operation *lhs,
-                                                      Operation *rhs) {
+static CommutationResult
+evaluate(Operation *lhs, Operation *rhs,
+         const llvm::DenseMap<Value, QuantumIdentity> &identities) {
   auto lhsInterface = dyn_cast<cudaq::quake::OperatorInterface>(lhs);
   auto rhsInterface = dyn_cast<cudaq::quake::OperatorInterface>(rhs);
   if (!lhsInterface || !rhsInterface)
@@ -461,9 +453,9 @@ CommutationResult CommutationAnalysis::Impl::evaluate(Operation *lhs,
 
   OperationView lhsView{lhs, lhsInterface};
   OperationView rhsView{rhs, rhsInterface};
-  if (auto reason = getView(lhsView))
+  if (auto reason = getView(lhsView, identities))
     return indeterminate(*reason);
-  if (auto reason = getView(rhsView))
+  if (auto reason = getView(rhsView, identities))
     return indeterminate(*reason);
 
   if (supportsAreDisjoint(lhsView, rhsView))
@@ -568,24 +560,23 @@ cudaq::quake::detail::getCommutationReasonId(CommutationReason reason) {
   llvm_unreachable("unhandled commutation reason");
 }
 
-CommutationAnalysis::CommutationAnalysis(Block &block)
-    : impl(std::make_unique<Impl>(block)) {}
-
-CommutationAnalysis::~CommutationAnalysis() = default;
+CommutationAnalysis::CommutationAnalysis(Block &block) : block(&block) {
+  buildIdentityMap(block, identities);
+}
 
 CommutationResult CommutationAnalysis::getResult(Operation *lhs,
                                                  Operation *rhs) {
   if (!lhs || !rhs)
     return indeterminate(CommutationReason::NullOperation);
-  if (lhs->getBlock() != impl->block || rhs->getBlock() != impl->block)
+  if (lhs->getBlock() != block || rhs->getBlock() != block)
     return indeterminate(CommutationReason::DifferentBlocks);
 
   OperationPair key = getCanonicalPair(lhs, rhs);
-  auto cached = impl->cache.find(key);
-  if (cached != impl->cache.end())
+  auto cached = cache.find(key);
+  if (cached != cache.end())
     return cached->second;
-  auto result = impl->evaluate(lhs, rhs);
-  impl->cache.try_emplace(key, result);
+  auto result = evaluate(lhs, rhs, identities);
+  cache.try_emplace(key, result);
   return result;
 }
 
