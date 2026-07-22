@@ -50,7 +50,7 @@ enum class CommutationReason {
   MutuallyExclusiveControls,
 
   // Reasons paired with CommutationStatus::DoesNotCommute.
-  /// Fixed Pauli products have odd anti-commutation parity on shared targets.
+  /// Exact Pauli operators have odd anti-commutation parity on shared targets.
   OddPauliParity,
 
   // Reasons paired with CommutationStatus::Indeterminate.
