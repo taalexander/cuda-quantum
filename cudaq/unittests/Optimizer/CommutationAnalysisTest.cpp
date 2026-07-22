@@ -528,6 +528,24 @@ TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
   expectPair(mixedAnalysis, mixedX, targetX, CommutationStatus::Commutes,
              CommutationReason::CompatibleControlledTargets);
 
+  auto nonunitaryFlow = createKernel("nonunitary_flow");
+  Value nonunitaryInput = createWire();
+  auto reset = cudaq::quake::ResetOp::create(
+      builder, loc, TypeRange{wireType()}, nonunitaryInput);
+  auto measurement = cudaq::quake::MzOp::create(
+      builder, loc,
+      TypeRange{cudaq::quake::MeasureType::get(&context), wireType()},
+      reset.getWires(), StringAttr{});
+  auto measurementX =
+      createGate<cudaq::quake::XOp>(measurement.getWires().front());
+  auto measurementRx = createGate<cudaq::quake::RxOp>(
+      ValueRange{createConstant(0.5)}, ValueRange{},
+      ValueRange{getWire(measurementX)});
+  finishFunction();
+  CommutationAnalysis nonunitaryAnalysis(nonunitaryFlow.front());
+  expectPair(nonunitaryAnalysis, measurementX, measurementRx,
+             CommutationStatus::Commutes, CommutationReason::SameAxis);
+
   builder.setInsertionPointToEnd(module->getBody());
   func::FuncOp::create(builder, loc, "wire_source",
                        builder.getFunctionType({}, {wireType()}));

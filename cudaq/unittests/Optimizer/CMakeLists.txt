@@ -34,6 +34,7 @@ create_cudaq_unittest_check_target("OptimizerUnitTests" "optimizer-unit-tests")
 add_cudaq_unittest("AnalysisPassUnitTests" "analysis-passes"
     SOURCES
         CommutationAnalysisTest.cpp
+        QubitIdentityAnalysisTest.cpp
         UnitaryOpGroupingTest.cpp
     INCLUDES
         ${CMAKE_SOURCE_DIR}/cudaq/lib/Optimizer/Analysis

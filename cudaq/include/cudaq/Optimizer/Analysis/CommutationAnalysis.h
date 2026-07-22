@@ -10,8 +10,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "mlir/IR/Value.h"
-#include <cstdint>
+#include <memory>
 #include <utility>
 
 namespace mlir {
@@ -20,6 +19,8 @@ class Operation;
 } // namespace mlir
 
 namespace cudaq::quake::detail {
+
+class QubitIdentityAnalysis;
 
 /// The outcome of a commutation query.
 enum class CommutationStatus { Commutes, DoesNotCommute, Indeterminate };
@@ -100,11 +101,17 @@ struct CommutationResult {
 /// `Indeterminate` as not safe to reorder. The separate statuses preserve the
 /// distinction between proven noncommutation and the absence of a proof.
 ///
+/// Qubit identity is followed through supported scalar wire/control value
+/// forms, including operators, measurement, and reset. Calls, reference or
+/// aggregate forms are conservative. Each scalar block argument establishes a
+/// local identity that is not correlated with values on predecessor edges.
+///
 /// Any mutation of the block invalidates the analysis instance. The caller
 /// must discard it before querying the changed block.
 class CommutationAnalysis {
 public:
   explicit CommutationAnalysis(mlir::Block &block);
+  ~CommutationAnalysis();
 
   CommutationAnalysis(const CommutationAnalysis &) = delete;
   CommutationAnalysis &operator=(const CommutationAnalysis &) = delete;
@@ -117,7 +124,7 @@ public:
 
 private:
   mlir::Block *block;
-  llvm::DenseMap<mlir::Value, std::uint32_t> qubitIds;
+  std::unique_ptr<QubitIdentityAnalysis> qubitIdentity;
   llvm::DenseMap<std::pair<mlir::Operation *, mlir::Operation *>,
                  CommutationResult>
       cache;
