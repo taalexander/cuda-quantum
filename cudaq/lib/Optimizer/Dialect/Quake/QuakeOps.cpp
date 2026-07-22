@@ -555,6 +555,8 @@ LogicalResult cudaq::quake::ExpPauliOp::verify() {
   if (getPauliLiteralAttr()) {
     if (getPauli())
       return emitOpError("cannot have both a literal and a value Pauli word");
+    if (!symbolizePauliWord(*getPauliLiteral()))
+      return emitOpError("literal Pauli word must contain only I, X, Y, or Z");
   } else {
     if (!getPauli())
       return emitOpError("must have either a literal or a value Pauli word");

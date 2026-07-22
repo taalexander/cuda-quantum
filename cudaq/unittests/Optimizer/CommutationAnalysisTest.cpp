@@ -148,6 +148,17 @@ protected:
 };
 } // namespace
 
+TEST(PauliWordTest, Symbolize) {
+  auto word = cudaq::quake::symbolizePauliWord("IXYZ");
+  ASSERT_TRUE(word);
+  ASSERT_EQ(word->size(), 4u);
+  EXPECT_EQ((*word)[0], cudaq::quake::Pauli::I);
+  EXPECT_EQ((*word)[1], cudaq::quake::Pauli::X);
+  EXPECT_EQ((*word)[2], cudaq::quake::Pauli::Y);
+  EXPECT_EQ((*word)[3], cudaq::quake::Pauli::Z);
+  EXPECT_FALSE(cudaq::quake::symbolizePauliWord("XA"));
+}
+
 TEST(CommutationResultTest, ResultContract) {
   const std::vector<std::pair<CommutationReason, llvm::StringRef>> cases{
       {CommutationReason::DisjointSupport, "disjoint-support"},
@@ -169,8 +180,8 @@ TEST(CommutationResultTest, ResultContract) {
        "unsupported-quantum-operand-type"},
       {CommutationReason::MalformedControlPolarity,
        "malformed-control-polarity"},
-      {CommutationReason::AmbiguousQuantumIdentity,
-       "ambiguous-quantum-identity"},
+      {CommutationReason::UnmappedQubitId, "unmapped-qubit-id"},
+      {CommutationReason::DuplicateQubitOperand, "duplicate-qubit-operand"},
       {CommutationReason::UnsupportedPauliWord, "unsupported-pauli-word"},
       {CommutationReason::NoApplicableRule, "no-applicable-rule"}};
   for (auto [reason, identifier] : cases)
@@ -430,7 +441,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
   CommutationAnalysis duplicateAnalysis(duplicate.front());
   expectPair(duplicateAnalysis, duplicateX, duplicateX,
              CommutationStatus::Indeterminate,
-             CommutationReason::AmbiguousQuantumIdentity);
+             CommutationReason::DuplicateQubitOperand);
 
   auto dynamicPauli =
       createKernel("dynamic_pauli", {cudaq::cc::CharspanType::get(&context)});
@@ -447,7 +458,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
              CommutationReason::UnsupportedPauliWord);
 }
 
-TEST_F(CommutationAnalysisTest, BlockLocalIdentity) {
+TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
   builder.setInsertionPointToEnd(module->getBody());
   cudaq::quake::WireSetOp::create(builder, loc, "wires", 2, ElementsAttr{});
   auto borrowed = createKernel("borrowed");
@@ -528,7 +539,7 @@ TEST_F(CommutationAnalysisTest, BlockLocalIdentity) {
   finishFunction();
   CommutationAnalysis callAnalysis(callResult.front());
   expectPair(callAnalysis, callX, callZ, CommutationStatus::Indeterminate,
-             CommutationReason::AmbiguousQuantumIdentity);
+             CommutationReason::UnmappedQubitId);
 }
 
 TEST_F(CommutationAnalysisTest, RebuildAfterMutation) {

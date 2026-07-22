@@ -64,8 +64,10 @@ enum class CommutationReason {
   UnsupportedQuantumOperandType,
   /// Control polarity metadata does not match the control operands.
   MalformedControlPolarity,
-  /// The analysis cannot establish a unique block-local quantum identity.
-  AmbiguousQuantumIdentity,
+  /// A quantum operand has no analysis-local qubit identifier.
+  UnmappedQubitId,
+  /// The same qubit appears more than once among an operation's operands.
+  DuplicateQubitOperand,
   /// An `ExpPauli` word is dynamic or is not aligned literal `I/X/Y/Z` data.
   UnsupportedPauliWord,
   /// Supported operations did not satisfy an available structural rule.
@@ -115,7 +117,7 @@ public:
 
 private:
   mlir::Block *block;
-  llvm::DenseMap<mlir::Value, std::uint32_t> identities;
+  llvm::DenseMap<mlir::Value, std::uint32_t> qubitIds;
   llvm::DenseMap<std::pair<mlir::Operation *, mlir::Operation *>,
                  CommutationResult>
       cache;
