@@ -9,62 +9,95 @@
 #pragma once
 
 #include "llvm/ADT/StringRef.h"
-#include <optional>
+#include <memory>
+
+namespace mlir {
+class Block;
+class Operation;
+} // namespace mlir
 
 namespace cudaq::quake::detail {
 
-enum class CommutationRelation { Commutes, DoesNotCommute, Unknown };
+/// The outcome of a structural commutation query.
+enum class CommutationStatus { Commutes, DoesNotCommute, Indeterminate };
 
-enum class CommutationProofReason {
+/// The rule or limitation that produced a commutation status.
+enum class CommutationReason {
+  /// The operations have disjoint block-local quantum support.
   DisjointSupport,
+  /// The supported operations have the same action and placement, optionally
+  /// with opposite adjoint states.
   SameOperation,
+  /// Both operations are diagonal in the computational basis.
   ComputationalDiagonal,
+  /// Both operations rotate about the same axis. Rotation angles may differ;
+  /// `PhasedRx` additionally requires an exact phase match.
   SameAxis,
-  PauliParity,
+  /// Pauli products have even anti-commutation parity on shared targets.
+  EvenPauliParity,
+  /// Fixed Pauli products have odd anti-commutation parity on shared targets.
+  OddPauliParity,
+  /// A diagonal operation overlaps the other operation only on controls.
   DiagonalOnControls,
+  /// Controlled operations have commuting target actions and no target-control
+  /// crossover.
   CompatibleControlledTargets,
-  MutuallyExclusiveControls
-};
-
-enum class CommutationFailureReason {
+  /// Opposite polarity on a shared control makes the control predicates
+  /// mutually exclusive.
+  MutuallyExclusiveControls,
+  /// At least one query operation is null.
   NullOperation,
+  /// At least one operation is outside the analyzed block.
   DifferentBlocks,
-  UnsupportedOperation,
-  UnsupportedQubitOperand,
-  InvalidControlPolarity,
-  AmbiguousQuantumValue,
-  NotProven
+  /// At least one operation does not implement Quake `OperatorInterface`.
+  UnsupportedOperationKind,
+  /// A quantum operand is not a supported scalar wire or control value.
+  UnsupportedQuantumOperandType,
+  /// Control polarity metadata does not match the control operands.
+  MalformedControlPolarity,
+  /// The analysis cannot establish a unique block-local quantum identity.
+  AmbiguousQuantumIdentity,
+  /// An `ExpPauli` word is dynamic or is not aligned literal `I/X/Y/Z` data.
+  UnsupportedPauliWord,
+  /// Supported operations did not satisfy an available structural rule.
+  NoApplicableRule
 };
 
-llvm::StringRef getCommutationProofReasonId(CommutationProofReason reason);
-llvm::StringRef getCommutationFailureReasonId(CommutationFailureReason reason);
+/// Return the stable textual identifier for a commutation reason.
+llvm::StringRef getCommutationReasonId(CommutationReason reason);
 
-/// A structural commutation decision and the reason supporting it.
-class CommutationResult {
+/// A structural commutation outcome and its classification.
+struct CommutationResult {
+  CommutationStatus status;
+  CommutationReason reason;
+
+  /// True only when structural analysis proved exact commutation.
+  explicit operator bool() const {
+    return status == CommutationStatus::Commutes;
+  }
+};
+
+/// Read-only structural commutation analysis for operations in one block.
+///
+/// Any mutation of the block invalidates the analysis instance. The caller
+/// must discard it before querying the changed block.
+class CommutationAnalysis {
 public:
-  /// Return a proved exact commutation result.
-  static CommutationResult getCommutes(CommutationProofReason reason);
-  /// Return a result proving that the operations do not commute.
-  static CommutationResult getDoesNotCommute(CommutationProofReason reason);
-  /// Return an unproved result with its conservative failure classification.
-  static CommutationResult getUnknown(CommutationFailureReason reason);
+  explicit CommutationAnalysis(mlir::Block &block);
+  ~CommutationAnalysis();
 
-  CommutationRelation getRelation() const { return relation; }
-  std::optional<CommutationProofReason> getProofReason() const {
-    return proofReason;
-  }
-  std::optional<CommutationFailureReason> getFailureReason() const {
-    return failureReason;
-  }
+  CommutationAnalysis(const CommutationAnalysis &) = delete;
+  CommutationAnalysis &operator=(const CommutationAnalysis &) = delete;
+
+  /// Return the detailed symmetric relation between two operations.
+  CommutationResult getResult(mlir::Operation *lhs, mlir::Operation *rhs);
+
+  /// Return true only when exact commutation has been proven.
+  bool canCommute(mlir::Operation *lhs, mlir::Operation *rhs);
 
 private:
-  CommutationResult(CommutationRelation relation,
-                    std::optional<CommutationProofReason> proofReason,
-                    std::optional<CommutationFailureReason> failureReason);
-
-  CommutationRelation relation;
-  std::optional<CommutationProofReason> proofReason;
-  std::optional<CommutationFailureReason> failureReason;
+  struct Impl;
+  std::unique_ptr<Impl> impl;
 };
 
 } // namespace cudaq::quake::detail
