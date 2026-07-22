@@ -67,7 +67,8 @@ enum class CommutationReason {
   MalformedControlPolarity,
   /// A quantum operand has no analysis-local qubit identifier.
   UnmappedQubitId,
-  /// The same qubit appears more than once among an operation's operands.
+  /// An operation uses the same physical qubit in more than one control or
+  /// target position.
   DuplicateQubitOperand,
   /// An `ExpPauli` word is dynamic or is not aligned literal `I/X/Y/Z` data.
   UnsupportedPauliWord,
@@ -91,7 +92,17 @@ struct CommutationResult {
 
 /// Read-only commutation analysis for operations in one block.
 ///
-/// The analysis is primarily designed to prove when reordering is safe.
+/// Analyzes whether two Quake operations in the same block are proven to
+/// commute and therefore can be reordered.
+///
+/// The block must contain valid Quake value-form IR. Candidate operations must
+/// implement Quake `OperatorInterface`, and their quantum operands must use
+/// supported scalar `!quake.wire` or `!quake.control` values. Operations on
+/// disjoint qubits commute regardless of their operator kind. For overlapping
+/// qubits, the analysis applies structural rules for recognized built-in Quake
+/// operators. It does not infer overlapping-support semantics from custom
+/// unitary matrices or dynamic Pauli words.
+///
 /// `DoesNotCommute` is returned only for the limited cases where an available
 /// rule proves noncommutation. `Indeterminate` means that the available rules
 /// established neither result. It does not imply either commutation or
@@ -102,9 +113,10 @@ struct CommutationResult {
 /// distinction between proven noncommutation and the absence of a proof.
 ///
 /// Qubit identity is followed through supported scalar wire/control value
-/// forms, including operators, measurement, and reset. Calls, reference or
-/// aggregate forms are conservative. Each scalar block argument establishes a
-/// local identity that is not correlated with values on predecessor edges.
+/// forms, including operators, measurement, and reset. The analysis does not
+/// follow identity through calls, references, or aggregates. Each scalar block
+/// argument establishes a local identity that is not correlated with values on
+/// predecessor edges.
 ///
 /// Any mutation of the block invalidates the analysis instance. The caller
 /// must discard it before querying the changed block.

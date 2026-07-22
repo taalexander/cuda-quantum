@@ -90,11 +90,6 @@ static OperationPair getCanonicalPair(Operation *lhs, Operation *rhs) {
   return {lhs, rhs};
 }
 
-static bool isCustomUnitary(Operation *operation) {
-  return isa<cudaq::quake::CustomUnitaryCallOp,
-             cudaq::quake::CustomUnitaryConstantOp>(operation);
-}
-
 static bool isSupportedSharedOperation(Operation *operation) {
   return isa<cudaq::quake::HOp, cudaq::quake::XOp, cudaq::quake::YOp,
              cudaq::quake::ZOp, cudaq::quake::SOp, cudaq::quake::TOp,
@@ -171,6 +166,7 @@ static std::optional<PauliWord> getLiteralPaulis(const OperationView &view) {
   if (!expPauli)
     return std::nullopt;
   auto literal = expPauli.getPauliLiteralAttr();
+  // TODO: Move literal/target alignment into the ExpPauli verifier.
   if (!literal || literal.getValue().size() != view.targets.size())
     return std::nullopt;
   return cudaq::quake::symbolizePauliWord(literal.getValue());
@@ -478,6 +474,7 @@ static std::optional<CommutationReason>
 getView(OperationView &view, const QubitIdentityAnalysis &qubitIdentity) {
   auto negatedControls = view.interface.getNegatedControls();
   auto controls = view.interface.getControls();
+  // TODO: Move polarity/control alignment into the Quake operator verifier.
   if (negatedControls && negatedControls->size() != controls.size())
     return CommutationReason::MalformedControlPolarity;
 
@@ -532,8 +529,6 @@ static CommutationResult evaluate(Operation *lhs, Operation *rhs,
 
   if (auto result = tryDisjointSupport(lhsView, rhsView))
     return *result;
-  if (isCustomUnitary(lhs) || isCustomUnitary(rhs))
-    return indeterminate(CommutationReason::NoApplicableRule);
   if (!isSupportedSharedOperation(lhs) || !isSupportedSharedOperation(rhs))
     return indeterminate(CommutationReason::NoApplicableRule);
   if (!hasSupportedPauliWord(lhsView) || !hasSupportedPauliWord(rhsView))

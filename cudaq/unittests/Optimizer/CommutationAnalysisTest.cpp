@@ -426,8 +426,8 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
         %x = quake.x %q0 : (!quake.wire) -> !quake.wire
         %h = quake.h %x : (!quake.wire) -> !quake.wire
         %control = quake.to_ctrl %q1 : (!quake.wire) -> !quake.control
-        %controlled = quake.x [%control] %h : (!quake.control, !quake.wire) -> !quake.wire
-        %exp = quake.exp_pauli (%angle) %controlled to "X" : (f64, !quake.wire) -> !quake.wire
+        %controlled = quake.x [%control neg [true, false]] %h : (!quake.control, !quake.wire) -> !quake.wire
+        %exp = quake.exp_pauli (%angle) %controlled to "XX" : (f64, !quake.wire) -> !quake.wire
         %z = quake.z %exp : (!quake.wire) -> !quake.wire
         quake.sink %z : !quake.wire
         return
@@ -437,11 +437,11 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
         return
       }
       func.func @duplicate_role() {
-        %control = quake.null_wire
+        %control_wire = quake.null_wire
         %target = quake.null_wire
-        %x:2 = quake.x [%control] %target : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
-        quake.sink %x#0 : !quake.wire
-        quake.sink %x#1 : !quake.wire
+        %control = quake.to_ctrl %control_wire : (!quake.wire) -> !quake.control
+        %x = quake.x [%control, %control] %target : (!quake.control, !quake.control, !quake.wire) -> !quake.wire
+        quake.sink %x : !quake.wire
         return
       }
       func.func @dynamic_pauli(%word: !cc.charspan) {
@@ -466,17 +466,10 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
   expectPair(analysis, operators[0], operators[1],
              CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);
-
-  cast<cudaq::quake::XOp>(operators[2])
-      .setNegatedQubitControlsAttr(
-          builder.getDenseBoolArrayAttr({true, false}));
-  cast<cudaq::quake::ExpPauliOp>(operators[3])
-      .setPauliLiteralAttr(builder.getStringAttr("XX"));
-  CommutationAnalysis malformedAnalysis(function.front());
-  expectPair(malformedAnalysis, operators[2], operators[4],
+  expectPair(analysis, operators[2], operators[4],
              CommutationStatus::Indeterminate,
              CommutationReason::MalformedControlPolarity);
-  expectPair(malformedAnalysis, operators[3], operators[4],
+  expectPair(analysis, operators[3], operators[4],
              CommutationStatus::Indeterminate,
              CommutationReason::UnsupportedPauliWord);
 
@@ -491,7 +484,6 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
   auto duplicate = getFunction(*module, "duplicate_role");
   auto duplicateOperators = getOperators(*module, "duplicate_role");
   ASSERT_EQ(duplicateOperators.size(), 1u);
-  duplicateOperators[0]->setOperand(1, duplicateOperators[0]->getOperand(0));
   CommutationAnalysis duplicateAnalysis(duplicate.front());
   expectPair(duplicateAnalysis, duplicateOperators[0], duplicateOperators[0],
              CommutationStatus::Indeterminate,
