@@ -42,6 +42,7 @@ add_cudaq_unittest("AnalysisPassUnitTests" "analysis-passes"
         MLIRArithDialect
         MLIRFuncDialect
         MLIRIR
+        MLIRParser
         QuakeDialect
         CCDialect
         OptAnalysis

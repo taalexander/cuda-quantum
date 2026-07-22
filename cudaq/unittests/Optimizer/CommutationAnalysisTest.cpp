@@ -6,20 +6,20 @@
  * the terms of the Apache License 2.0 which accompanies this distribution.    *
  ******************************************************************************/
 
-// clang-format off
 #include "cudaq/Optimizer/Analysis/CommutationAnalysis.h"
+#include "gtest/gtest.h"
 #include "cudaq/Optimizer/Dialect/CC/CCDialect.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeDialect.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
-#include "gtest/gtest.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Parser/Parser.h"
 #include <utility>
 #include <vector>
-// clang-format on
 
 using namespace mlir;
 
@@ -37,14 +37,38 @@ protected:
     context.loadDialect<func::FuncDialect>();
     context.loadDialect<cudaq::cc::CCDialect>();
     context.loadDialect<cudaq::quake::QuakeDialect>();
-    module = OwningOpRef<ModuleOp>(ModuleOp::create(UnknownLoc::get(&context)));
   }
 
-  func::FuncOp createKernel(llvm::StringRef name,
-                            ArrayRef<Type> inputTypes = {}) {
+  OwningOpRef<ModuleOp> parseModule(llvm::StringRef source) {
+    auto parsed = parseSourceString<ModuleOp>(source, &context);
+    if (parsed && succeeded(verify(*parsed)))
+      return parsed;
+    return {};
+  }
+
+  static func::FuncOp getFunction(ModuleOp module, llvm::StringRef name) {
+    auto function = module.lookupSymbol<func::FuncOp>(name);
+    EXPECT_TRUE(function);
+    return function;
+  }
+
+  static llvm::SmallVector<Operation *>
+  getOperators(ModuleOp module, llvm::StringRef functionName) {
+    llvm::SmallVector<Operation *> operators;
+    auto function = getFunction(module, functionName);
+    if (!function)
+      return operators;
+    for (Operation &operation : function.front())
+      if (isa<cudaq::quake::OperatorInterface>(operation))
+        operators.push_back(&operation);
+    return operators;
+  }
+
+  func::FuncOp createMutationKernel() {
+    module = OwningOpRef<ModuleOp>(ModuleOp::create(UnknownLoc::get(&context)));
     builder.setInsertionPointToEnd(module->getBody());
-    auto function = func::FuncOp::create(
-        builder, loc, name, builder.getFunctionType(inputTypes, {}));
+    auto function = func::FuncOp::create(builder, loc, "mutation",
+                                         builder.getFunctionType({}, {}));
     function->setAttr("cudaq-kernel", builder.getUnitAttr());
     function.addEntryBlock();
     builder.setInsertionPointToStart(&function.front());
@@ -55,51 +79,11 @@ protected:
     return cudaq::quake::NullWireOp::create(builder, loc, wireType());
   }
 
-  Value createConstant(double value) {
-    return arith::ConstantFloatOp::create(builder, loc, builder.getF64Type(),
-                                          APFloat(value));
-  }
-
-  template <typename Op>
-  Op createGate(ValueRange parameters, ValueRange controls,
-                ValueRange targets) {
-    llvm::SmallVector<Type> wireResults;
-    for (Value control : controls)
-      if (isa<cudaq::quake::WireType>(control.getType()))
-        wireResults.push_back(control.getType());
-    for (Value target : targets)
-      if (isa<cudaq::quake::WireType>(target.getType()))
-        wireResults.push_back(target.getType());
-    return Op::create(builder, loc, TypeRange{wireResults}, UnitAttr{},
-                      parameters, controls, targets, DenseBoolArrayAttr{});
-  }
-
-  template <typename Op>
-  Op createGate(ValueRange controls, ValueRange targets) {
-    return createGate<Op>(ValueRange{}, controls, targets);
-  }
-
   template <typename Op>
   Op createGate(Value target) {
-    return createGate<Op>(ValueRange{}, ValueRange{target});
-  }
-
-  cudaq::quake::ExpPauliOp createExpPauli(ValueRange parameters,
-                                          ValueRange targets,
-                                          llvm::StringRef word) {
-    llvm::SmallVector<Type> wireResults(targets.size(), wireType());
-    return cudaq::quake::ExpPauliOp::create(
-        builder, loc, TypeRange{wireResults}, UnitAttr{}, parameters,
-        ValueRange{}, targets, DenseBoolArrayAttr{}, Value{},
-        builder.getStringAttr(word));
-  }
-
-  cudaq::quake::ExpPauliOp createExpPauli(ValueRange parameters,
-                                          ValueRange targets, Value word) {
-    llvm::SmallVector<Type> wireResults(targets.size(), wireType());
-    return cudaq::quake::ExpPauliOp::create(
-        builder, loc, TypeRange{wireResults}, UnitAttr{}, parameters,
-        ValueRange{}, targets, DenseBoolArrayAttr{}, word, StringAttr{});
+    return Op::create(builder, loc, TypeRange{wireType()}, UnitAttr{},
+                      ValueRange{}, ValueRange{}, ValueRange{target},
+                      DenseBoolArrayAttr{});
   }
 
   void finishFunction() {
@@ -111,11 +95,6 @@ protected:
     for (Value wire : unusedWires)
       cudaq::quake::SinkOp::create(builder, loc, TypeRange{}, wire);
     func::ReturnOp::create(builder, loc);
-  }
-
-  template <typename Op>
-  static Value getWire(Op operation, unsigned index = 0) {
-    return operation.getWires()[index];
   }
 
   static void expectPair(CommutationAnalysis &analysis, Operation *lhs,
@@ -135,10 +114,6 @@ protected:
 
   cudaq::quake::WireType wireType() {
     return cudaq::quake::WireType::get(&context);
-  }
-
-  cudaq::quake::ControlType controlType() {
-    return cudaq::quake::ControlType::get(&context);
   }
 
   MLIRContext context;
@@ -196,372 +171,471 @@ TEST(CommutationResultTest, ResultContract) {
 }
 
 TEST_F(CommutationAnalysisTest, DisjointSupport) {
-  auto function = createKernel("disjoint");
-  Value q0 = createWire();
-  Value q1 = createWire();
-  auto x = createGate<cudaq::quake::XOp>(q0);
-  auto h = createGate<cudaq::quake::HOp>(q1);
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @disjoint() {
+        %q0 = quake.null_wire
+        %q1 = quake.null_wire
+        %x = quake.x %q0 : (!quake.wire) -> !quake.wire
+        %h = quake.h %q1 : (!quake.wire) -> !quake.wire
+        quake.sink %x : !quake.wire
+        quake.sink %h : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "disjoint");
+  ASSERT_EQ(operators.size(), 2u);
+  auto function = getFunction(*module, "disjoint");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, x, h, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::DisjointSupport);
 }
 
 TEST_F(CommutationAnalysisTest, SameOperation) {
-  auto function = createKernel("same_operation", {builder.getF64Type()});
-  Value theta = function.getArgument(0);
-  Value q0 = createWire();
-  Value q1 = createWire();
-  Value q2 = createWire();
-  Value q3 = createWire();
-  auto rx0 = createGate<cudaq::quake::RxOp>(ValueRange{theta}, ValueRange{},
-                                            ValueRange{q0});
-  auto rx1 = createGate<cudaq::quake::RxOp>(ValueRange{theta}, ValueRange{},
-                                            ValueRange{getWire(rx0)});
-  rx1.setIsAdj(true);
-  auto swap0 = createGate<cudaq::quake::SwapOp>(ValueRange{},
-                                                ValueRange{getWire(rx1), q1});
-  auto swap1 = createGate<cudaq::quake::SwapOp>(
-      ValueRange{}, ValueRange{getWire(swap0, 1), getWire(swap0, 0)});
-  Value zero0 = createConstant(0.0);
-  Value zero1 = createConstant(0.0);
-  Value one0 = createConstant(1.0);
-  Value one1 = createConstant(1.0);
-  auto u20 = createGate<cudaq::quake::U2Op>(ValueRange{zero0, one0},
-                                            ValueRange{}, ValueRange{q2});
-  auto u21 = createGate<cudaq::quake::U2Op>(
-      ValueRange{zero1, one1}, ValueRange{}, ValueRange{getWire(u20)});
-  auto u30 = createGate<cudaq::quake::U3Op>(ValueRange{theta, zero0, one0},
-                                            ValueRange{}, ValueRange{q3});
-  auto u31 = createGate<cudaq::quake::U3Op>(
-      ValueRange{theta, zero0, one0}, ValueRange{}, ValueRange{getWire(u30)});
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @same_operation(%theta: f64) {
+        %zero0 = arith.constant 0.0 : f64
+        %zero1 = arith.constant 0.0 : f64
+        %one0 = arith.constant 1.0 : f64
+        %one1 = arith.constant 1.0 : f64
+        %q0 = quake.null_wire
+        %q1 = quake.null_wire
+        %q2 = quake.null_wire
+        %q3 = quake.null_wire
+        %rx0 = quake.rx (%theta) %q0 : (f64, !quake.wire) -> !quake.wire
+        %rx1 = quake.rx<adj> (%theta) %rx0 : (f64, !quake.wire) -> !quake.wire
+        %swap0:2 = quake.swap %rx1, %q1 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        %swap1:2 = quake.swap %swap0#1, %swap0#0 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        %u20 = quake.u2 (%zero0, %one0) %q2 : (f64, f64, !quake.wire) -> !quake.wire
+        %u21 = quake.u2 (%zero1, %one1) %u20 : (f64, f64, !quake.wire) -> !quake.wire
+        %u30 = quake.u3 (%theta, %zero0, %one0) %q3 : (f64, f64, f64, !quake.wire) -> !quake.wire
+        %u31 = quake.u3 (%theta, %zero0, %one0) %u30 : (f64, f64, f64, !quake.wire) -> !quake.wire
+        quake.sink %swap1#0 : !quake.wire
+        quake.sink %swap1#1 : !quake.wire
+        quake.sink %u21 : !quake.wire
+        quake.sink %u31 : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "same_operation");
+  ASSERT_EQ(operators.size(), 8u);
+  auto function = getFunction(*module, "same_operation");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, rx0, rx1, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::SameOperation);
-  expectPair(analysis, swap0, swap1, CommutationStatus::Commutes,
+  expectPair(analysis, operators[2], operators[3], CommutationStatus::Commutes,
              CommutationReason::SameOperation);
-  expectPair(analysis, u20, u21, CommutationStatus::Commutes,
+  expectPair(analysis, operators[4], operators[5], CommutationStatus::Commutes,
              CommutationReason::SameOperation);
-  expectPair(analysis, u30, u31, CommutationStatus::Commutes,
+  expectPair(analysis, operators[6], operators[7], CommutationStatus::Commutes,
              CommutationReason::SameOperation);
 }
 
 TEST_F(CommutationAnalysisTest, ComputationalDiagonal) {
-  auto function = createKernel("diagonal");
-  Value q = createWire();
-  Value angle = createConstant(0.5);
-  auto z = createGate<cudaq::quake::ZOp>(q);
-  auto s = createGate<cudaq::quake::SOp>(getWire(z));
-  auto t = createGate<cudaq::quake::TOp>(getWire(s));
-  auto r1 = createGate<cudaq::quake::R1Op>(ValueRange{angle}, ValueRange{},
-                                           ValueRange{getWire(t)});
-  auto rz = createGate<cudaq::quake::RzOp>(ValueRange{angle}, ValueRange{},
-                                           ValueRange{getWire(r1)});
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @diagonal() {
+        %angle = arith.constant 5.0e-1 : f64
+        %q = quake.null_wire
+        %z = quake.z %q : (!quake.wire) -> !quake.wire
+        %s = quake.s %z : (!quake.wire) -> !quake.wire
+        %t = quake.t %s : (!quake.wire) -> !quake.wire
+        %r1 = quake.r1 (%angle) %t : (f64, !quake.wire) -> !quake.wire
+        %rz = quake.rz (%angle) %r1 : (f64, !quake.wire) -> !quake.wire
+        quake.sink %rz : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "diagonal");
+  ASSERT_EQ(operators.size(), 5u);
+  auto function = getFunction(*module, "diagonal");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, z, s, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::ComputationalDiagonal);
-  expectPair(analysis, s, t, CommutationStatus::Commutes,
+  expectPair(analysis, operators[1], operators[2], CommutationStatus::Commutes,
              CommutationReason::ComputationalDiagonal);
-  expectPair(analysis, r1, rz, CommutationStatus::Commutes,
+  expectPair(analysis, operators[3], operators[4], CommutationStatus::Commutes,
              CommutationReason::ComputationalDiagonal);
 }
 
 TEST_F(CommutationAnalysisTest, SameAxis) {
-  auto function = createKernel("same_axis");
-  Value q0 = createWire();
-  Value q1 = createWire();
-  Value q2 = createWire();
-  Value angle0 = createConstant(0.5);
-  Value angle1 = createConstant(1.0);
-  Value phase = createConstant(0.25);
-  Value otherPhase = createConstant(0.75);
-  auto x = createGate<cudaq::quake::XOp>(q0);
-  auto rx = createGate<cudaq::quake::RxOp>(ValueRange{angle0}, ValueRange{},
-                                           ValueRange{getWire(x)});
-  auto phased0 = createGate<cudaq::quake::PhasedRxOp>(
-      ValueRange{angle0, phase}, ValueRange{}, ValueRange{q1});
-  auto phased1 = createGate<cudaq::quake::PhasedRxOp>(
-      ValueRange{angle1, phase}, ValueRange{}, ValueRange{getWire(phased0)});
-  auto phased2 = createGate<cudaq::quake::PhasedRxOp>(
-      ValueRange{angle0, otherPhase}, ValueRange{},
-      ValueRange{getWire(phased1)});
-  auto y = createGate<cudaq::quake::YOp>(q2);
-  auto ry = createGate<cudaq::quake::RyOp>(ValueRange{angle0}, ValueRange{},
-                                           ValueRange{getWire(y)});
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @same_axis() {
+        %angle0 = arith.constant 5.0e-1 : f64
+        %angle1 = arith.constant 1.0 : f64
+        %phase = arith.constant 2.5e-1 : f64
+        %other_phase = arith.constant 7.5e-1 : f64
+        %q0 = quake.null_wire
+        %q1 = quake.null_wire
+        %q2 = quake.null_wire
+        %x = quake.x %q0 : (!quake.wire) -> !quake.wire
+        %rx = quake.rx (%angle0) %x : (f64, !quake.wire) -> !quake.wire
+        %p0 = quake.phased_rx (%angle0, %phase) %q1 : (f64, f64, !quake.wire) -> !quake.wire
+        %p1 = quake.phased_rx (%angle1, %phase) %p0 : (f64, f64, !quake.wire) -> !quake.wire
+        %p2 = quake.phased_rx (%angle0, %other_phase) %p1 : (f64, f64, !quake.wire) -> !quake.wire
+        %y = quake.y %q2 : (!quake.wire) -> !quake.wire
+        %ry = quake.ry (%angle0) %y : (f64, !quake.wire) -> !quake.wire
+        quake.sink %rx : !quake.wire
+        quake.sink %p2 : !quake.wire
+        quake.sink %ry : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "same_axis");
+  ASSERT_EQ(operators.size(), 7u);
+  auto function = getFunction(*module, "same_axis");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, x, rx, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::SameAxis);
-  expectPair(analysis, phased0, phased1, CommutationStatus::Commutes,
+  expectPair(analysis, operators[2], operators[3], CommutationStatus::Commutes,
              CommutationReason::SameAxis);
-  expectPair(analysis, phased1, phased2, CommutationStatus::Indeterminate,
+  expectPair(analysis, operators[3], operators[4],
+             CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);
-  expectPair(analysis, y, ry, CommutationStatus::Commutes,
+  expectPair(analysis, operators[5], operators[6], CommutationStatus::Commutes,
              CommutationReason::SameAxis);
 }
 
 TEST_F(CommutationAnalysisTest, PauliParity) {
-  auto function = createKernel("pauli_parity");
-  Value q0 = createWire();
-  Value q1 = createWire();
-  Value q2 = createWire();
-  Value q3 = createWire();
-  Value angle = createConstant(0.5);
-  auto xx = createExpPauli(ValueRange{angle}, ValueRange{q0, q1}, "XX");
-  auto zz = createExpPauli(ValueRange{angle},
-                           ValueRange{getWire(xx, 0), getWire(xx, 1)}, "ZZ");
-  auto x = createGate<cudaq::quake::XOp>(q2);
-  auto z = createGate<cudaq::quake::ZOp>(getWire(x));
-  auto expX = createExpPauli(ValueRange{angle}, ValueRange{q3}, "X");
-  auto expZ = createGate<cudaq::quake::ZOp>(getWire(expX));
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @pauli_parity() {
+        %angle = arith.constant 5.0e-1 : f64
+        %q0 = quake.null_wire
+        %q1 = quake.null_wire
+        %q2 = quake.null_wire
+        %q3 = quake.null_wire
+        %xx:2 = quake.exp_pauli (%angle) %q0, %q1 to "XX" : (f64, !quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        %zz:2 = quake.exp_pauli (%angle) %xx#0, %xx#1 to "ZZ" : (f64, !quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        %x = quake.x %q2 : (!quake.wire) -> !quake.wire
+        %z = quake.z %x : (!quake.wire) -> !quake.wire
+        %exp_x = quake.exp_pauli (%angle) %q3 to "X" : (f64, !quake.wire) -> !quake.wire
+        %exp_z = quake.z %exp_x : (!quake.wire) -> !quake.wire
+        quake.sink %zz#0 : !quake.wire
+        quake.sink %zz#1 : !quake.wire
+        quake.sink %z : !quake.wire
+        quake.sink %exp_z : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "pauli_parity");
+  ASSERT_EQ(operators.size(), 6u);
+  auto function = getFunction(*module, "pauli_parity");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, xx, zz, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::EvenPauliParity);
-  expectPair(analysis, x, z, CommutationStatus::DoesNotCommute,
+  expectPair(analysis, operators[2], operators[3],
+             CommutationStatus::DoesNotCommute,
              CommutationReason::OddPauliParity);
-  expectPair(analysis, expX, expZ, CommutationStatus::Indeterminate,
+  expectPair(analysis, operators[4], operators[5],
+             CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);
 }
 
 TEST_F(CommutationAnalysisTest, DiagonalOnControls) {
-  auto function = createKernel("diagonal_on_controls");
-  Value control = createWire();
-  Value target = createWire();
-  auto z = createGate<cudaq::quake::ZOp>(control);
-  auto controlledX =
-      createGate<cudaq::quake::XOp>(ValueRange{getWire(z)}, ValueRange{target});
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @diagonal_on_controls() {
+        %control = quake.null_wire
+        %target = quake.null_wire
+        %z = quake.z %control : (!quake.wire) -> !quake.wire
+        %cx:2 = quake.x [%z] %target : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        quake.sink %cx#0 : !quake.wire
+        quake.sink %cx#1 : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "diagonal_on_controls");
+  ASSERT_EQ(operators.size(), 2u);
+  auto function = getFunction(*module, "diagonal_on_controls");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, z, controlledX, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::DiagonalOnControls);
 }
 
 TEST_F(CommutationAnalysisTest, CompatibleControlledTargets) {
-  auto function = createKernel("compatible_targets");
-  Value controlWire = createWire();
-  Value target = createWire();
-  Value angle = createConstant(0.5);
-  Value control = cudaq::quake::ToControlOp::create(builder, loc, controlType(),
-                                                    controlWire);
-  auto controlledX =
-      createGate<cudaq::quake::XOp>(ValueRange{control}, ValueRange{target});
-  auto controlledRx = createGate<cudaq::quake::RxOp>(
-      ValueRange{angle}, ValueRange{control}, ValueRange{getWire(controlledX)});
-  Value crossoverControl = createWire();
-  Value crossoverTarget = createWire();
-  auto crossoverX = createGate<cudaq::quake::XOp>(ValueRange{crossoverControl},
-                                                  ValueRange{crossoverTarget});
-  auto crossoverZ = createGate<cudaq::quake::ZOp>(
-      ValueRange{getWire(crossoverX, 1)}, ValueRange{getWire(crossoverX, 0)});
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @compatible_targets() {
+        %angle = arith.constant 5.0e-1 : f64
+        %control_wire = quake.null_wire
+        %target = quake.null_wire
+        %control = quake.to_ctrl %control_wire : (!quake.wire) -> !quake.control
+        %cx = quake.x [%control] %target : (!quake.control, !quake.wire) -> !quake.wire
+        %crx = quake.rx (%angle) [%control] %cx : (f64, !quake.control, !quake.wire) -> !quake.wire
+        %cross_control = quake.null_wire
+        %cross_target = quake.null_wire
+        %cross_x:2 = quake.x [%cross_control] %cross_target : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        %cross_z:2 = quake.z [%cross_x#1] %cross_x#0 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        quake.sink %crx : !quake.wire
+        quake.sink %cross_z#0 : !quake.wire
+        quake.sink %cross_z#1 : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "compatible_targets");
+  ASSERT_EQ(operators.size(), 4u);
+  auto function = getFunction(*module, "compatible_targets");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, controlledX, controlledRx, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::CompatibleControlledTargets);
-  expectPair(analysis, crossoverX, crossoverZ, CommutationStatus::Indeterminate,
+  expectPair(analysis, operators[2], operators[3],
+             CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);
 }
 
 TEST_F(CommutationAnalysisTest, MutuallyExclusiveControls) {
-  auto function = createKernel("exclusive_controls");
-  Value controlWire = createWire();
-  Value target = createWire();
-  Value control = cudaq::quake::ToControlOp::create(builder, loc, controlType(),
-                                                    controlWire);
-  auto controlledX =
-      createGate<cudaq::quake::XOp>(ValueRange{control}, ValueRange{target});
-  auto controlledY = createGate<cudaq::quake::YOp>(
-      ValueRange{control}, ValueRange{getWire(controlledX)});
-  controlledY.setNegatedQubitControlsAttr(
-      builder.getDenseBoolArrayAttr({true}));
-  finishFunction();
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @exclusive_controls() {
+        %control_wire = quake.null_wire
+        %target = quake.null_wire
+        %control = quake.to_ctrl %control_wire : (!quake.wire) -> !quake.control
+        %x = quake.x [%control] %target : (!quake.control, !quake.wire) -> !quake.wire
+        %y = quake.y [%control neg [true]] %x : (!quake.control, !quake.wire) -> !quake.wire
+        quake.sink %y : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "exclusive_controls");
+  ASSERT_EQ(operators.size(), 2u);
+  auto function = getFunction(*module, "exclusive_controls");
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, controlledX, controlledY, CommutationStatus::Commutes,
+  expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::MutuallyExclusiveControls);
 }
 
 TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
-  auto function = createKernel("conservative");
-  Value q0 = createWire();
-  Value q1 = createWire();
-  Value angle = createConstant(0.5);
-  auto x = createGate<cudaq::quake::XOp>(q0);
-  auto h = createGate<cudaq::quake::HOp>(getWire(x));
-
-  Value control =
-      cudaq::quake::ToControlOp::create(builder, loc, controlType(), q1);
-  auto malformed = createGate<cudaq::quake::XOp>(ValueRange{control},
-                                                 ValueRange{getWire(h)});
-  malformed.setNegatedQubitControlsAttr(
-      builder.getDenseBoolArrayAttr({true, false}));
-
-  auto badPauli =
-      createExpPauli(ValueRange{angle}, ValueRange{getWire(malformed)}, "XX");
-  auto z = createGate<cudaq::quake::ZOp>(getWire(badPauli));
-  cudaq::quake::SinkOp::create(builder, loc, TypeRange{}, getWire(z));
-  auto returnOp = func::ReturnOp::create(builder, loc);
-
+  auto module = parseModule(R"mlir(
+    module {
+      func.func private @wire_source() -> !quake.wire
+      func.func @conservative() {
+        %angle = arith.constant 5.0e-1 : f64
+        %q0 = quake.null_wire
+        %q1 = quake.null_wire
+        %x = quake.x %q0 : (!quake.wire) -> !quake.wire
+        %h = quake.h %x : (!quake.wire) -> !quake.wire
+        %control = quake.to_ctrl %q1 : (!quake.wire) -> !quake.control
+        %controlled = quake.x [%control] %h : (!quake.control, !quake.wire) -> !quake.wire
+        %exp = quake.exp_pauli (%angle) %controlled to "X" : (f64, !quake.wire) -> !quake.wire
+        %z = quake.z %exp : (!quake.wire) -> !quake.wire
+        quake.sink %z : !quake.wire
+        return
+      }
+      func.func @aggregate(%q: !quake.veq<2>) {
+        quake.x %q : (!quake.veq<2>) -> ()
+        return
+      }
+      func.func @duplicate_role() {
+        %control = quake.null_wire
+        %target = quake.null_wire
+        %x:2 = quake.x [%control] %target : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        quake.sink %x#0 : !quake.wire
+        quake.sink %x#1 : !quake.wire
+        return
+      }
+      func.func @dynamic_pauli(%word: !cc.charspan) {
+        %angle = arith.constant 5.0e-1 : f64
+        %q = quake.null_wire
+        %exp = quake.exp_pauli (%angle) %q to %word : (f64, !quake.wire, !cc.charspan) -> !quake.wire
+        %z = quake.z %exp : (!quake.wire) -> !quake.wire
+        quake.sink %z : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto operators = getOperators(*module, "conservative");
+  ASSERT_EQ(operators.size(), 5u);
+  auto function = getFunction(*module, "conservative");
+  auto *returnOp = function.front().getTerminator();
   CommutationAnalysis analysis(function.front());
-  expectPair(analysis, nullptr, x, CommutationStatus::Indeterminate,
+  expectPair(analysis, nullptr, operators[0], CommutationStatus::Indeterminate,
              CommutationReason::NullOperation);
-  expectPair(analysis, x, returnOp, CommutationStatus::Indeterminate,
+  expectPair(analysis, operators[0], returnOp, CommutationStatus::Indeterminate,
              CommutationReason::UnsupportedOperationKind);
-  expectPair(analysis, x, h, CommutationStatus::Indeterminate,
+  expectPair(analysis, operators[0], operators[1],
+             CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);
-  expectPair(analysis, malformed, z, CommutationStatus::Indeterminate,
+
+  cast<cudaq::quake::XOp>(operators[2])
+      .setNegatedQubitControlsAttr(
+          builder.getDenseBoolArrayAttr({true, false}));
+  cast<cudaq::quake::ExpPauliOp>(operators[3])
+      .setPauliLiteralAttr(builder.getStringAttr("XX"));
+  CommutationAnalysis malformedAnalysis(function.front());
+  expectPair(malformedAnalysis, operators[2], operators[4],
+             CommutationStatus::Indeterminate,
              CommutationReason::MalformedControlPolarity);
-  expectPair(analysis, badPauli, z, CommutationStatus::Indeterminate,
+  expectPair(malformedAnalysis, operators[3], operators[4],
+             CommutationStatus::Indeterminate,
              CommutationReason::UnsupportedPauliWord);
 
-  auto aggregate =
-      createKernel("aggregate", {cudaq::quake::VeqType::get(&context, 2)});
-  auto aggregateX =
-      cudaq::quake::XOp::create(builder, loc, aggregate.getArgument(0));
-  finishFunction();
+  auto aggregate = getFunction(*module, "aggregate");
+  auto aggregateOperators = getOperators(*module, "aggregate");
+  ASSERT_EQ(aggregateOperators.size(), 1u);
   CommutationAnalysis aggregateAnalysis(aggregate.front());
-  expectPair(aggregateAnalysis, aggregateX, aggregateX,
+  expectPair(aggregateAnalysis, aggregateOperators[0], aggregateOperators[0],
              CommutationStatus::Indeterminate,
              CommutationReason::UnsupportedQuantumOperandType);
 
-  auto duplicate = createKernel("duplicate_role");
-  Value duplicateWire = createWire();
-  auto duplicateX = createGate<cudaq::quake::XOp>(ValueRange{duplicateWire},
-                                                  ValueRange{duplicateWire});
-  finishFunction();
+  auto duplicate = getFunction(*module, "duplicate_role");
+  auto duplicateOperators = getOperators(*module, "duplicate_role");
+  ASSERT_EQ(duplicateOperators.size(), 1u);
+  duplicateOperators[0]->setOperand(1, duplicateOperators[0]->getOperand(0));
   CommutationAnalysis duplicateAnalysis(duplicate.front());
-  expectPair(duplicateAnalysis, duplicateX, duplicateX,
+  expectPair(duplicateAnalysis, duplicateOperators[0], duplicateOperators[0],
              CommutationStatus::Indeterminate,
              CommutationReason::DuplicateQubitOperand);
 
-  auto dynamicPauli =
-      createKernel("dynamic_pauli", {cudaq::cc::CharspanType::get(&context)});
-  Value dynamicTarget = createWire();
-  Value dynamicAngle = createConstant(0.5);
-  auto dynamicExp =
-      createExpPauli(ValueRange{dynamicAngle}, ValueRange{dynamicTarget},
-                     dynamicPauli.getArgument(0));
-  auto dynamicZ = createGate<cudaq::quake::ZOp>(getWire(dynamicExp));
-  finishFunction();
+  auto dynamicPauli = getFunction(*module, "dynamic_pauli");
+  auto dynamicOperators = getOperators(*module, "dynamic_pauli");
+  ASSERT_EQ(dynamicOperators.size(), 2u);
   CommutationAnalysis dynamicAnalysis(dynamicPauli.front());
-  expectPair(dynamicAnalysis, dynamicExp, dynamicZ,
+  expectPair(dynamicAnalysis, dynamicOperators[0], dynamicOperators[1],
              CommutationStatus::Indeterminate,
              CommutationReason::UnsupportedPauliWord);
 }
 
 TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
-  builder.setInsertionPointToEnd(module->getBody());
-  cudaq::quake::WireSetOp::create(builder, loc, "wires", 2, ElementsAttr{});
-  auto borrowed = createKernel("borrowed");
-  auto q0a =
-      cudaq::quake::BorrowWireOp::create(builder, loc, wireType(), "wires", 0);
-  auto x0a = createGate<cudaq::quake::XOp>(q0a.getResult());
-  cudaq::quake::ReturnWireOp::create(builder, loc, getWire(x0a));
-  auto q0b =
-      cudaq::quake::BorrowWireOp::create(builder, loc, wireType(), "wires", 0);
-  auto x0b = createGate<cudaq::quake::XOp>(q0b.getResult());
-  cudaq::quake::ReturnWireOp::create(builder, loc, getWire(x0b));
-  auto q1 =
-      cudaq::quake::BorrowWireOp::create(builder, loc, wireType(), "wires", 1);
-  auto h1 = createGate<cudaq::quake::HOp>(q1.getResult());
-  cudaq::quake::ReturnWireOp::create(builder, loc, getWire(h1));
-  finishFunction();
+  auto module = parseModule(R"mlir(
+    module {
+      quake.wire_set @wires[2]
+      func.func private @wire_source() -> !quake.wire
+      func.func @borrowed() {
+        %q0a = quake.borrow_wire @wires[0] : !quake.wire
+        %x0a = quake.x %q0a : (!quake.wire) -> !quake.wire
+        quake.return_wire %x0a : !quake.wire
+        %q0b = quake.borrow_wire @wires[0] : !quake.wire
+        %x0b = quake.x %q0b : (!quake.wire) -> !quake.wire
+        quake.return_wire %x0b : !quake.wire
+        %q1 = quake.borrow_wire @wires[1] : !quake.wire
+        %h1 = quake.h %q1 : (!quake.wire) -> !quake.wire
+        quake.return_wire %h1 : !quake.wire
+        return
+      }
+      func.func @converted() {
+        %angle = arith.constant 5.0e-1 : f64
+        %q = quake.null_wire
+        %x = quake.x %q : (!quake.wire) -> !quake.wire
+        %control = quake.to_ctrl %x : (!quake.wire) -> !quake.control
+        %wire = quake.from_ctrl %control : (!quake.control) -> !quake.wire
+        %rx = quake.rx (%angle) %wire : (f64, !quake.wire) -> !quake.wire
+        quake.sink %rx : !quake.wire
+        return
+      }
+      func.func @other() {
+        %q = quake.null_wire
+        %z = quake.z %q : (!quake.wire) -> !quake.wire
+        quake.sink %z : !quake.wire
+        return
+      }
+      func.func @arguments(%q0: !quake.wire, %q1: !quake.wire) {
+        %x = quake.x %q0 : (!quake.wire) -> !quake.wire
+        %h = quake.h %q1 : (!quake.wire) -> !quake.wire
+        quake.sink %x : !quake.wire
+        quake.sink %h : !quake.wire
+        return
+      }
+      func.func @mixed_results() {
+        %wire_control = quake.null_wire
+        %reusable_wire = quake.null_wire
+        %target = quake.null_wire
+        %control = quake.to_ctrl %reusable_wire : (!quake.wire) -> !quake.control
+        %mixed_x:2 = quake.x [%wire_control, %control] %target : (!quake.wire, !quake.control, !quake.wire) -> (!quake.wire, !quake.wire)
+        %control_z = quake.z %mixed_x#0 : (!quake.wire) -> !quake.wire
+        %target_x = quake.x %mixed_x#1 : (!quake.wire) -> !quake.wire
+        quake.sink %control_z : !quake.wire
+        quake.sink %target_x : !quake.wire
+        return
+      }
+      func.func @nonunitary_flow() {
+        %angle = arith.constant 5.0e-1 : f64
+        %q = quake.null_wire
+        %reset = quake.reset %q : (!quake.wire) -> !quake.wire
+        %measure, %wire = quake.mz %reset : (!quake.wire) -> (!quake.measure, !quake.wire)
+        %x = quake.x %wire : (!quake.wire) -> !quake.wire
+        %rx = quake.rx (%angle) %x : (f64, !quake.wire) -> !quake.wire
+        quake.sink %rx : !quake.wire
+        return
+      }
+      func.func @call_result() {
+        %q = call @wire_source() : () -> !quake.wire
+        %x = quake.x %q : (!quake.wire) -> !quake.wire
+        %z = quake.z %x : (!quake.wire) -> !quake.wire
+        quake.sink %z : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+
+  auto borrowed = getFunction(*module, "borrowed");
+  auto borrowedOperators = getOperators(*module, "borrowed");
+  ASSERT_EQ(borrowedOperators.size(), 3u);
   CommutationAnalysis borrowedAnalysis(borrowed.front());
-  expectPair(borrowedAnalysis, x0a, x0b, CommutationStatus::Commutes,
-             CommutationReason::SameOperation);
-  expectPair(borrowedAnalysis, x0a, h1, CommutationStatus::Commutes,
-             CommutationReason::DisjointSupport);
-
-  auto converted = createKernel("converted");
-  Value q = createWire();
-  Value angle = createConstant(0.5);
-  auto x = createGate<cudaq::quake::XOp>(q);
-  Value control = cudaq::quake::ToControlOp::create(builder, loc, controlType(),
-                                                    getWire(x));
-  Value returned =
-      cudaq::quake::FromControlOp::create(builder, loc, wireType(), control);
-  auto rx = createGate<cudaq::quake::RxOp>(ValueRange{angle}, ValueRange{},
-                                           ValueRange{returned});
-  finishFunction();
-  CommutationAnalysis convertedAnalysis(converted.front());
-  expectPair(convertedAnalysis, x, rx, CommutationStatus::Commutes,
-             CommutationReason::SameAxis);
-
-  auto other = createKernel("other");
-  Value otherWire = createWire();
-  auto otherZ = createGate<cudaq::quake::ZOp>(otherWire);
-  finishFunction();
-  expectPair(convertedAnalysis, x, otherZ, CommutationStatus::Indeterminate,
-             CommutationReason::DifferentBlocks);
-
-  auto arguments = createKernel("arguments", {wireType(), wireType()});
-  auto argumentX = createGate<cudaq::quake::XOp>(arguments.getArgument(0));
-  auto argumentH = createGate<cudaq::quake::HOp>(arguments.getArgument(1));
-  finishFunction();
-  CommutationAnalysis argumentAnalysis(arguments.front());
-  expectPair(argumentAnalysis, argumentX, argumentH,
+  expectPair(borrowedAnalysis, borrowedOperators[0], borrowedOperators[1],
+             CommutationStatus::Commutes, CommutationReason::SameOperation);
+  expectPair(borrowedAnalysis, borrowedOperators[0], borrowedOperators[2],
              CommutationStatus::Commutes, CommutationReason::DisjointSupport);
 
-  auto mixed = createKernel("mixed_results");
-  Value wireControl = createWire();
-  Value reusableWire = createWire();
-  Value mixedTarget = createWire();
-  Value reusableControl = cudaq::quake::ToControlOp::create(
-      builder, loc, controlType(), reusableWire);
-  auto mixedX = createGate<cudaq::quake::XOp>(
-      ValueRange{wireControl, reusableControl}, ValueRange{mixedTarget});
-  auto controlZ = createGate<cudaq::quake::ZOp>(getWire(mixedX, 0));
-  auto targetX = createGate<cudaq::quake::XOp>(getWire(mixedX, 1));
-  finishFunction();
-  CommutationAnalysis mixedAnalysis(mixed.front());
-  expectPair(mixedAnalysis, mixedX, controlZ, CommutationStatus::Commutes,
-             CommutationReason::DiagonalOnControls);
-  expectPair(mixedAnalysis, mixedX, targetX, CommutationStatus::Commutes,
-             CommutationReason::CompatibleControlledTargets);
-
-  auto nonunitaryFlow = createKernel("nonunitary_flow");
-  Value nonunitaryInput = createWire();
-  auto reset = cudaq::quake::ResetOp::create(
-      builder, loc, TypeRange{wireType()}, nonunitaryInput);
-  auto measurement = cudaq::quake::MzOp::create(
-      builder, loc,
-      TypeRange{cudaq::quake::MeasureType::get(&context), wireType()},
-      reset.getWires(), StringAttr{});
-  auto measurementX =
-      createGate<cudaq::quake::XOp>(measurement.getWires().front());
-  auto measurementRx = createGate<cudaq::quake::RxOp>(
-      ValueRange{createConstant(0.5)}, ValueRange{},
-      ValueRange{getWire(measurementX)});
-  finishFunction();
-  CommutationAnalysis nonunitaryAnalysis(nonunitaryFlow.front());
-  expectPair(nonunitaryAnalysis, measurementX, measurementRx,
+  auto converted = getFunction(*module, "converted");
+  auto convertedOperators = getOperators(*module, "converted");
+  ASSERT_EQ(convertedOperators.size(), 2u);
+  CommutationAnalysis convertedAnalysis(converted.front());
+  expectPair(convertedAnalysis, convertedOperators[0], convertedOperators[1],
              CommutationStatus::Commutes, CommutationReason::SameAxis);
 
-  builder.setInsertionPointToEnd(module->getBody());
-  func::FuncOp::create(builder, loc, "wire_source",
-                       builder.getFunctionType({}, {wireType()}));
-  auto callResult = createKernel("call_result");
-  auto call = func::CallOp::create(builder, loc, "wire_source",
-                                   TypeRange{wireType()}, ValueRange{});
-  auto callX = createGate<cudaq::quake::XOp>(call.getResult(0));
-  auto callZ = createGate<cudaq::quake::ZOp>(getWire(callX));
-  finishFunction();
+  auto otherOperators = getOperators(*module, "other");
+  ASSERT_EQ(otherOperators.size(), 1u);
+  expectPair(convertedAnalysis, convertedOperators[0], otherOperators[0],
+             CommutationStatus::Indeterminate,
+             CommutationReason::DifferentBlocks);
+
+  auto arguments = getFunction(*module, "arguments");
+  auto argumentOperators = getOperators(*module, "arguments");
+  ASSERT_EQ(argumentOperators.size(), 2u);
+  CommutationAnalysis argumentAnalysis(arguments.front());
+  expectPair(argumentAnalysis, argumentOperators[0], argumentOperators[1],
+             CommutationStatus::Commutes, CommutationReason::DisjointSupport);
+
+  auto mixed = getFunction(*module, "mixed_results");
+  auto mixedOperators = getOperators(*module, "mixed_results");
+  ASSERT_EQ(mixedOperators.size(), 3u);
+  CommutationAnalysis mixedAnalysis(mixed.front());
+  expectPair(mixedAnalysis, mixedOperators[0], mixedOperators[1],
+             CommutationStatus::Commutes,
+             CommutationReason::DiagonalOnControls);
+  expectPair(mixedAnalysis, mixedOperators[0], mixedOperators[2],
+             CommutationStatus::Commutes,
+             CommutationReason::CompatibleControlledTargets);
+
+  auto nonunitaryFlow = getFunction(*module, "nonunitary_flow");
+  auto nonunitaryOperators = getOperators(*module, "nonunitary_flow");
+  ASSERT_EQ(nonunitaryOperators.size(), 2u);
+  CommutationAnalysis nonunitaryAnalysis(nonunitaryFlow.front());
+  expectPair(nonunitaryAnalysis, nonunitaryOperators[0], nonunitaryOperators[1],
+             CommutationStatus::Commutes, CommutationReason::SameAxis);
+
+  auto callResult = getFunction(*module, "call_result");
+  auto callOperators = getOperators(*module, "call_result");
+  ASSERT_EQ(callOperators.size(), 2u);
   CommutationAnalysis callAnalysis(callResult.front());
-  expectPair(callAnalysis, callX, callZ, CommutationStatus::Indeterminate,
+  expectPair(callAnalysis, callOperators[0], callOperators[1],
+             CommutationStatus::Indeterminate,
              CommutationReason::UnmappedQubitId);
 }
 
 TEST_F(CommutationAnalysisTest, RebuildAfterMutation) {
-  auto function = createKernel("mutation");
+  auto function = createMutationKernel();
   Value q0 = createWire();
   Value q1 = createWire();
   auto x = createGate<cudaq::quake::XOp>(q0);
