@@ -136,7 +136,8 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
   EXPECT_EQ(analysis.getQubitId(borrow0a), analysis.getQubitId(borrow0b));
   EXPECT_NE(analysis.getQubitId(borrow0a), analysis.getQubitId(borrow1));
 
-  // Aggregate, call, and reference lineage is deliberately unsupported.
+  // Identity propagation through aggregates, calls, and references is
+  // deliberately unsupported.
   EXPECT_FALSE(analysis.getQubitId(function.getArgument(2)));
   EXPECT_FALSE(analysis.getQubitId(call.getResult(0)));
   EXPECT_FALSE(analysis.getQubitId(unwrapped.getResult()));

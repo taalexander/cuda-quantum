@@ -60,16 +60,21 @@ static LogicalResult verifyWireResultsAreLinear(Operation *op) {
   return success();
 }
 
-static LogicalResult verifyOperator(Operation *op) {
-  auto operatorInterface = cast<cudaq::quake::OperatorInterface>(op);
+// Verify invariants shared by Quake operators: control polarity metadata must
+// align with control operands, and value-form wire results must remain linear.
+static LogicalResult
+verifyQuakeOperator(cudaq::quake::OperatorInterface operatorInterface) {
   auto controlPolarities = operatorInterface.getNegatedControls();
   if (controlPolarities &&
       controlPolarities->size() != operatorInterface.getControls().size())
-    return op->emitOpError(
+    return operatorInterface->emitOpError(
         "control polarity count must match control operand count");
-  return verifyWireResultsAreLinear(op);
+  return verifyWireResultsAreLinear(operatorInterface.getOperation());
 }
 
+// Return the total number of target qubits when every target has a known size.
+// Target operand count is insufficient because one fixed-size veq operand may
+// represent multiple qubits. Dynamic veq sizes keep the count unknown.
 static std::optional<std::size_t>
 getStaticTargetQubitCount(ValueRange targets) {
   std::size_t count = 0;
@@ -593,7 +598,8 @@ LogicalResult cudaq::quake::ExpPauliOp::verify() {
   }
   if (!(getParameters().empty() || getParameters().size() == 1))
     return emitOpError("can only have 0 or 1 parameter");
-  return verifyOperator(getOperation());
+  return verifyQuakeOperator(
+      cast<cudaq::quake::OperatorInterface>(getOperation()));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1239,7 +1245,8 @@ LogicalResult cudaq::quake::CustomUnitaryCallOp::verify() {
   auto fn = SymbolTable::lookupNearestSymbolFrom<func::FuncOp>(*this, gen);
   if (!fn)
     return emitOpError("symbol must be a func.func");
-  return verifyOperator(getOperation());
+  return verifyQuakeOperator(
+      cast<cudaq::quake::OperatorInterface>(getOperation()));
 }
 
 void cudaq::quake::CustomUnitaryConstantOp::getOperatorMatrix(Matrix &matrix) {
@@ -1328,7 +1335,8 @@ LogicalResult cudaq::quake::CustomUnitaryConstantOp::verify() {
           "Invalid matrix size, required 2^N * 2^N for N-qubit operation");
   }
 
-  return verifyOperator(getOperation());
+  return verifyQuakeOperator(
+      cast<cudaq::quake::OperatorInterface>(getOperation()));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1449,7 +1457,8 @@ QUANTUM_OPS(INSTANTIATE_CALLBACKS)
 
 #define INSTANTIATE_OPERATOR_VERIFY(Op)                                        \
   LogicalResult cudaq::quake::Op::verify() {                                   \
-    return verifyOperator(getOperation());                                     \
+    return verifyQuakeOperator(                                                \
+        cast<cudaq::quake::OperatorInterface>(getOperation()));                \
   }
 
 BUILTIN_GATE_OPS(INSTANTIATE_OPERATOR_VERIFY)

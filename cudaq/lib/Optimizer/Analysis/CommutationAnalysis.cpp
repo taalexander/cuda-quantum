@@ -90,6 +90,7 @@ static OperationPair getCanonicalPair(Operation *lhs, Operation *rhs) {
   return {lhs, rhs};
 }
 
+// Identify built-in operations for which shared-support rules are implemented.
 static bool isSupportedSharedOperation(Operation *operation) {
   return isa<cudaq::quake::HOp, cudaq::quake::XOp, cudaq::quake::YOp,
              cudaq::quake::ZOp, cudaq::quake::SOp, cudaq::quake::TOp,
@@ -106,24 +107,29 @@ static bool isPauliOperator(Operation *operation) {
       operation);
 }
 
+// Identify operations whose target action is on the Pauli-X axis.
 static bool isXAxis(Operation *operation) {
   return isa<cudaq::quake::XOp, cudaq::quake::RxOp>(operation);
 }
 
+// Identify operations whose target action is on the Pauli-Y axis.
 static bool isYAxis(Operation *operation) {
   return isa<cudaq::quake::YOp, cudaq::quake::RyOp>(operation);
 }
 
+// Identify operations whose target action is on the Pauli-Z axis.
 static bool isZAxis(Operation *operation) {
   return isa<cudaq::quake::ZOp, cudaq::quake::SOp, cudaq::quake::TOp,
              cudaq::quake::R1Op, cudaq::quake::RzOp>(operation);
 }
 
+// Identify operations covered by the computational-diagonal rule.
 static bool isComputationalDiagonal(Operation *operation) {
   // The initial rule set recognizes the shared single-target Z-axis family.
   return isZAxis(operation);
 }
 
+// Require parameter identity or equal constant attributes; do not approximate.
 static bool areExactParameterValues(Value lhs, Value rhs) {
   if (lhs == rhs)
     return true;
@@ -137,6 +143,7 @@ static bool areExactParameterValues(Value lhs, Value rhs) {
          lhsConstant == rhsConstant;
 }
 
+// Compare all OperatorInterface parameters using exact structural equality.
 static bool haveExactParameters(cudaq::quake::OperatorInterface lhs,
                                 cudaq::quake::OperatorInterface rhs) {
   auto lhsParameters = lhs.getParameters();
@@ -145,6 +152,7 @@ static bool haveExactParameters(cudaq::quake::OperatorInterface lhs,
          llvm::equal(lhsParameters, rhsParameters, areExactParameterValues);
 }
 
+// Compare ordered targets, except for Swap's unordered target pair.
 static bool haveSameTargets(const OperationView &lhs,
                             const OperationView &rhs) {
   if (lhs.targets.size() != rhs.targets.size())
@@ -160,6 +168,7 @@ static bool haveSameTargets(const OperationView &lhs,
   return lhs.targets == rhs.targets;
 }
 
+// Decode the literal Pauli word needed by structural ExpPauli rules.
 static std::optional<PauliWord> getLiteralPaulis(const OperationView &view) {
   auto expPauli = dyn_cast<cudaq::quake::ExpPauliOp>(view.operation);
   if (!expPauli)
@@ -170,11 +179,13 @@ static std::optional<PauliWord> getLiteralPaulis(const OperationView &view) {
   return cudaq::quake::symbolizePauliWord(literal.getValue());
 }
 
+// Reject dynamic ExpPauli words before rules that require literal symbols.
 static bool hasSupportedPauliWord(const OperationView &view) {
   return !isa<cudaq::quake::ExpPauliOp>(view.operation) ||
          getLiteralPaulis(view).has_value();
 }
 
+// Compare the generator or matrix symbol that defines a custom unitary.
 static bool haveSameCustomUnitaryDefinition(Operation *lhs, Operation *rhs) {
   if (auto lhsCall = dyn_cast<cudaq::quake::CustomUnitaryCallOp>(lhs)) {
     auto rhsCall = dyn_cast<cudaq::quake::CustomUnitaryCallOp>(rhs);
@@ -188,6 +199,7 @@ static bool haveSameCustomUnitaryDefinition(Operation *lhs, Operation *rhs) {
   return false;
 }
 
+// Prove that two views describe the same action on the same qubits.
 static bool haveSameOperation(const OperationView &lhs,
                               const OperationView &rhs) {
   // Match the operation kind and every action-bearing interface value. Adjoint
@@ -212,6 +224,7 @@ static bool haveSameOperation(const OperationView &lhs,
   return true;
 }
 
+// Recognize equal single-target rotation axes for the same-axis rule.
 static bool haveSameAxisTargetAction(const OperationView &lhs,
                                      const OperationView &rhs) {
   if (lhs.targets.size() != 1 || rhs.targets.size() != 1 ||
@@ -262,6 +275,7 @@ static std::optional<PauliAction> getPauliAction(const OperationView &view) {
   return action;
 }
 
+// Compute whether shared Pauli factors contain an odd number of mismatches.
 static bool hasOddPauliAnticommutationParity(const PauliAction &lhs,
                                              const PauliAction &rhs) {
   const auto *smaller = &lhs.terms;
@@ -291,6 +305,7 @@ static bool haveDisjointQuantumSupport(const OperationView &lhs,
       *smaller, [&](QubitId qubitId) { return larger->contains(qubitId); });
 }
 
+// Detect a qubit used as a target by one operation and a control by the other.
 static bool hasTargetControlCrossover(const OperationView &lhs,
                                       const OperationView &rhs) {
   return llvm::any_of(lhs.targetQubitIds,
@@ -302,6 +317,7 @@ static bool hasTargetControlCrossover(const OperationView &lhs,
          });
 }
 
+// Check that a diagonal operation shares only controls of the other operation.
 static bool diagonalOverlapsOnlyControls(const OperationView &diagonal,
                                          const OperationView &controlled) {
   if (!isComputationalDiagonal(diagonal.operation) ||
@@ -337,6 +353,7 @@ static bool haveDisjointTargetSupport(const OperationView &lhs,
       *smaller, [&](QubitId qubitId) { return larger->contains(qubitId); });
 }
 
+// Test target-only commutation after controlled-rule preconditions are met.
 static bool targetActionsCommute(const OperationView &lhs,
                                  const OperationView &rhs) {
   if (haveDisjointTargetSupport(lhs, rhs))
@@ -376,49 +393,49 @@ static bool haveMutuallyExclusiveControls(const OperationView &lhs,
   return false;
 }
 
+// Operators on disjoint qubits commute because
+// (A tensor I)(I tensor B) = A tensor B = (I tensor B)(A tensor I).
 static std::optional<CommutationResult>
 tryDisjointSupport(const OperationView &lhs, const OperationView &rhs) {
-  // Operators on disjoint qubits commute because
-  // (A tensor I)(I tensor B) = A tensor B = (I tensor B)(A tensor I).
   if (haveDisjointQuantumSupport(lhs, rhs))
     return commutes(CommutationReason::DisjointSupport);
   return std::nullopt;
 }
 
+// U commutes with itself and its exact adjoint because UU^-1 = U^-1U = I.
 static std::optional<CommutationResult>
 trySameOperation(const OperationView &lhs, const OperationView &rhs) {
-  // U commutes with itself and its exact adjoint because UU^-1 = U^-1U = I.
   if (haveSameOperation(lhs, rhs))
     return commutes(CommutationReason::SameOperation);
   return std::nullopt;
 }
 
+// Computational-basis diagonal matrices satisfy D1 D2 = D2 D1 because their
+// products are pointwise scalar products in the same basis.
 static std::optional<CommutationResult>
 tryComputationalDiagonal(const OperationView &lhs, const OperationView &rhs) {
-  // Computational-basis diagonal matrices satisfy D1 D2 = D2 D1 because
-  // their products are pointwise scalar products in the same basis.
   if (isComputationalDiagonal(lhs.operation) &&
       isComputationalDiagonal(rhs.operation))
     return commutes(CommutationReason::ComputationalDiagonal);
   return std::nullopt;
 }
 
+// Operators that are functions of the same Pauli axis P commute because
+// f(P) g(P) = g(P) f(P). This rule recognizes PhasedRx axes only when their
+// phase values match exactly.
 static std::optional<CommutationResult> trySameAxis(const OperationView &lhs,
                                                     const OperationView &rhs) {
-  // Operators that are functions of the same Pauli axis P commute because
-  // f(P) g(P) = g(P) f(P). This rule recognizes PhasedRx axes only when their
-  // phase values match exactly.
   if (lhs.controls.empty() && rhs.controls.empty() &&
       haveSameAxisTargetAction(lhs, rhs))
     return commutes(CommutationReason::SameAxis);
   return std::nullopt;
 }
 
+// Pauli products obey PQ = (-1)^m QP, where m is the number of aligned
+// anti-commuting factors. Odd parity proves a negative only for exact Pauli
+// operators, not parameterized ExpPauli rotations.
 static std::optional<CommutationResult>
 tryPauliParity(const OperationView &lhs, const OperationView &rhs) {
-  // Pauli products obey PQ = (-1)^m QP, where m is the number of aligned
-  // anti-commuting factors. Odd parity proves a negative only for exact Pauli
-  // operators, not parameterized ExpPauli rotations.
   if (!lhs.controls.empty() || !rhs.controls.empty())
     return std::nullopt;
   auto lhsPauli = getPauliAction(lhs);
@@ -432,33 +449,33 @@ tryPauliParity(const OperationView &lhs, const OperationView &rhs) {
   return std::nullopt;
 }
 
+// A diagonal action D commutes with a computational-basis control projector P
+// because DP = PD. This applies when every shared qubit is only a control of
+// the other operation, never one of its targets.
 static std::optional<CommutationResult>
 tryDiagonalOnControls(const OperationView &lhs, const OperationView &rhs) {
-  // A diagonal action D commutes with a computational-basis control projector
-  // P because DP = PD. This applies when every shared qubit is only a control
-  // of the other operation, never one of its targets.
   if (diagonalOverlapsOnlyControls(lhs, rhs) ||
       diagonalOverlapsOnlyControls(rhs, lhs))
     return commutes(CommutationReason::DiagonalOnControls);
   return std::nullopt;
 }
 
+// With no target-control crossover, commuting target actions and commuting
+// control projectors make every term of the controlled products commute.
 static std::optional<CommutationResult>
 tryCompatibleControlledTargets(const OperationView &lhs,
                                const OperationView &rhs) {
-  // With no target-control crossover, commuting target actions and commuting
-  // control projectors make every term of the controlled products commute.
   if ((!lhs.controls.empty() || !rhs.controls.empty()) &&
       !hasTargetControlCrossover(lhs, rhs) && targetActionsCommute(lhs, rhs))
     return commutes(CommutationReason::CompatibleControlledTargets);
   return std::nullopt;
 }
 
+// Opposite polarity on a shared control gives disjoint projectors (PQ = 0), so
+// the controlled operations commute regardless of their target actions.
 static std::optional<CommutationResult>
 tryMutuallyExclusiveControls(const OperationView &lhs,
                              const OperationView &rhs) {
-  // Opposite polarity on a shared control gives disjoint projectors (PQ = 0),
-  // so the controlled operations commute regardless of their target actions.
   if (!lhs.controls.empty() && !rhs.controls.empty() &&
       !hasTargetControlCrossover(lhs, rhs) &&
       haveMutuallyExclusiveControls(lhs, rhs))
@@ -469,8 +486,20 @@ tryMutuallyExclusiveControls(const OperationView &lhs,
 using CommutationRule = std::optional<CommutationResult> (*)(
     const OperationView &, const OperationView &);
 
+// Apply general rules, reject unsupported shared-support cases, then apply the
+// remaining shared-support rules in stable proof-reason precedence order.
 static CommutationResult dispatchRules(const OperationView &lhs,
                                        const OperationView &rhs) {
+  if (auto result = tryDisjointSupport(lhs, rhs))
+    return *result;
+  if (auto result = trySameOperation(lhs, rhs))
+    return *result;
+  if (!isSupportedSharedOperation(lhs.operation) ||
+      !isSupportedSharedOperation(rhs.operation))
+    return indeterminate(CommutationReason::NoApplicableRule);
+  if (!hasSupportedPauliWord(lhs) || !hasSupportedPauliWord(rhs))
+    return indeterminate(CommutationReason::UnsupportedPauliWord);
+
   // Rule order determines which successful proof reason is reported.
   static constexpr CommutationRule orderedRules[] = {
       tryComputationalDiagonal,
@@ -486,12 +515,23 @@ static CommutationResult dispatchRules(const OperationView &lhs,
   return indeterminate(CommutationReason::NoApplicableRule);
 }
 
+// Populate the normalized view used by commutation rules. Resolve supported
+// scalar controls and targets to analysis-local qubit IDs, record their roles
+// and control polarities, and reject unmapped or duplicate qubit uses.
 static std::optional<CommutationReason>
-getView(OperationView &view, const QubitIdentityAnalysis &qubitIdentity) {
+populateOperationView(OperationView &view,
+                      const QubitIdentityAnalysis &qubitIdentity) {
+  // Valid Quake IR guarantees that polarity metadata, when present, has one
+  // entry per control operand.
   auto negatedControls = view.interface.getNegatedControls();
   auto controls = view.interface.getControls();
 
+  // A supported operator may use a qubit in only one control or target role.
+  // Track all resolved IDs here so duplicates are rejected across both groups.
   llvm::DenseSet<QubitId> seenQubitIds;
+
+  // Preserve control operand order while also building the support and
+  // identity-to-polarity lookup required by controlled-operation rules.
   view.controls.reserve(controls.size());
   for (auto [index, control] : llvm::enumerate(controls)) {
     if (!isa<cudaq::quake::WireType, cudaq::quake::ControlType>(
@@ -509,6 +549,8 @@ getView(OperationView &view, const QubitIdentityAnalysis &qubitIdentity) {
                                                      (*negatedControls)[index]);
   }
 
+  // Preserve target order for positional gate semantics and build the target
+  // membership lookup used by overlap and crossover rules.
   auto targets = view.interface.getTargets();
   view.targets.reserve(targets.size());
   for (Value target : targets) {
@@ -526,6 +568,7 @@ getView(OperationView &view, const QubitIdentityAnalysis &qubitIdentity) {
   return std::nullopt;
 }
 
+// Validate and normalize a query, then apply general and shared-support rules.
 static CommutationResult evaluate(Operation *lhs, Operation *rhs,
                                   const QubitIdentityAnalysis &qubitIdentity) {
   auto lhsInterface = dyn_cast<cudaq::quake::OperatorInterface>(lhs);
@@ -535,19 +578,11 @@ static CommutationResult evaluate(Operation *lhs, Operation *rhs,
 
   OperationView lhsView{lhs, lhsInterface};
   OperationView rhsView{rhs, rhsInterface};
-  if (auto reason = getView(lhsView, qubitIdentity))
+  if (auto reason = populateOperationView(lhsView, qubitIdentity))
     return indeterminate(*reason);
-  if (auto reason = getView(rhsView, qubitIdentity))
+  if (auto reason = populateOperationView(rhsView, qubitIdentity))
     return indeterminate(*reason);
 
-  if (auto result = tryDisjointSupport(lhsView, rhsView))
-    return *result;
-  if (auto result = trySameOperation(lhsView, rhsView))
-    return *result;
-  if (!isSupportedSharedOperation(lhs) || !isSupportedSharedOperation(rhs))
-    return indeterminate(CommutationReason::NoApplicableRule);
-  if (!hasSupportedPauliWord(lhsView) || !hasSupportedPauliWord(rhsView))
-    return indeterminate(CommutationReason::UnsupportedPauliWord);
   return dispatchRules(lhsView, rhsView);
 }
 

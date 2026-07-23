@@ -30,17 +30,17 @@ namespace cudaq::quake::detail {
 /// quantum-state equivalence. For example, measurement and reset preserve the
 /// virtual-qubit identity while changing its state.
 ///
-/// The analysis does not follow identity through calls, references, aggregates,
-/// or block edges. Values with unsupported or ambiguous lineage remain
-/// unidentified. Any mutation of the block invalidates the analysis.
+/// The analysis does not propagate identifiers through calls, references,
+/// aggregates, or block edges. Values that cannot be identified unambiguously
+/// remain unidentified. Any mutation of the block invalidates the analysis.
 class QubitIdentityAnalysis {
 public:
   using QubitId = std::uint32_t;
 
   explicit QubitIdentityAnalysis(mlir::Block &block);
 
-  /// Return the analysis-local qubit identifier, or no value when lineage is
-  /// unsupported or ambiguous.
+  /// Return the analysis-local qubit identifier, or no value when identity
+  /// cannot be propagated unambiguously.
   std::optional<QubitId> getQubitId(mlir::Value value) const;
 
 private:

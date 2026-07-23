@@ -14,7 +14,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
@@ -52,49 +51,14 @@ protected:
     return function;
   }
 
-  static llvm::SmallVector<Operation *>
-  getOperators(ModuleOp module, llvm::StringRef functionName) {
+  static llvm::SmallVector<Operation *> getOperators(func::FuncOp function) {
     llvm::SmallVector<Operation *> operators;
-    auto function = getFunction(module, functionName);
     if (!function)
       return operators;
     for (Operation &operation : function.front())
       if (isa<cudaq::quake::OperatorInterface>(operation))
         operators.push_back(&operation);
     return operators;
-  }
-
-  func::FuncOp createMutationKernel() {
-    module = OwningOpRef<ModuleOp>(ModuleOp::create(UnknownLoc::get(&context)));
-    builder.setInsertionPointToEnd(module->getBody());
-    auto function = func::FuncOp::create(builder, loc, "mutation",
-                                         builder.getFunctionType({}, {}));
-    function->setAttr("cudaq-kernel", builder.getUnitAttr());
-    function.addEntryBlock();
-    builder.setInsertionPointToStart(&function.front());
-    return function;
-  }
-
-  Value createWire() {
-    return cudaq::quake::NullWireOp::create(builder, loc, wireType());
-  }
-
-  template <typename Op>
-  Op createGate(Value target) {
-    return Op::create(builder, loc, TypeRange{wireType()}, UnitAttr{},
-                      ValueRange{}, ValueRange{}, ValueRange{target},
-                      DenseBoolArrayAttr{});
-  }
-
-  void finishFunction() {
-    llvm::SmallVector<Value> unusedWires;
-    for (Operation &operation : *builder.getInsertionBlock())
-      for (Value result : operation.getResults())
-        if (isa<cudaq::quake::WireType>(result.getType()) && result.use_empty())
-          unusedWires.push_back(result);
-    for (Value wire : unusedWires)
-      cudaq::quake::SinkOp::create(builder, loc, TypeRange{}, wire);
-    func::ReturnOp::create(builder, loc);
   }
 
   static void expectPair(CommutationAnalysis &analysis, Operation *lhs,
@@ -112,14 +76,7 @@ protected:
               status == CommutationStatus::Commutes);
   }
 
-  cudaq::quake::WireType wireType() {
-    return cudaq::quake::WireType::get(&context);
-  }
-
   MLIRContext context;
-  OpBuilder builder{&context};
-  Location loc = builder.getUnknownLoc();
-  OwningOpRef<ModuleOp> module;
 };
 } // namespace
 
@@ -182,9 +139,9 @@ TEST_F(CommutationAnalysisTest, DisjointSupport) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "disjoint");
-  ASSERT_EQ(operators.size(), 2u);
   auto function = getFunction(*module, "disjoint");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 2u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::DisjointSupport);
@@ -218,9 +175,9 @@ TEST_F(CommutationAnalysisTest, SameOperation) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "same_operation");
-  ASSERT_EQ(operators.size(), 8u);
   auto function = getFunction(*module, "same_operation");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 8u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::SameOperation);
@@ -248,9 +205,9 @@ TEST_F(CommutationAnalysisTest, ComputationalDiagonal) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "diagonal");
-  ASSERT_EQ(operators.size(), 5u);
   auto function = getFunction(*module, "diagonal");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 5u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::ComputationalDiagonal);
@@ -285,9 +242,9 @@ TEST_F(CommutationAnalysisTest, SameAxis) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "same_axis");
-  ASSERT_EQ(operators.size(), 7u);
   auto function = getFunction(*module, "same_axis");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 7u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::SameAxis);
@@ -323,9 +280,9 @@ TEST_F(CommutationAnalysisTest, PauliParity) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "pauli_parity");
-  ASSERT_EQ(operators.size(), 6u);
   auto function = getFunction(*module, "pauli_parity");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 6u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::EvenPauliParity);
@@ -351,9 +308,9 @@ TEST_F(CommutationAnalysisTest, DiagonalOnControls) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "diagonal_on_controls");
-  ASSERT_EQ(operators.size(), 2u);
   auto function = getFunction(*module, "diagonal_on_controls");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 2u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::DiagonalOnControls);
@@ -380,9 +337,9 @@ TEST_F(CommutationAnalysisTest, CompatibleControlledTargets) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "compatible_targets");
-  ASSERT_EQ(operators.size(), 4u);
   auto function = getFunction(*module, "compatible_targets");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 4u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::CompatibleControlledTargets);
@@ -405,9 +362,9 @@ TEST_F(CommutationAnalysisTest, MutuallyExclusiveControls) {
       }
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "exclusive_controls");
-  ASSERT_EQ(operators.size(), 2u);
   auto function = getFunction(*module, "exclusive_controls");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 2u);
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, operators[0], operators[1], CommutationStatus::Commutes,
              CommutationReason::MutuallyExclusiveControls);
@@ -480,9 +437,9 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
       cc.global constant private @unitary_matrix (dense<[(1.000000e+00,0.000000e+00), (0.000000e+00,0.000000e+00), (0.000000e+00,0.000000e+00), (1.000000e+00,0.000000e+00)]> : tensor<4xcomplex<f64>>) : !cc.array<complex<f64> x 4>
     })mlir");
   ASSERT_TRUE(module);
-  auto operators = getOperators(*module, "conservative");
-  ASSERT_EQ(operators.size(), 2u);
   auto function = getFunction(*module, "conservative");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 2u);
   auto *returnOp = function.front().getTerminator();
   CommutationAnalysis analysis(function.front());
   expectPair(analysis, nullptr, operators[0], CommutationStatus::Indeterminate,
@@ -494,7 +451,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
              CommutationReason::NoApplicableRule);
 
   auto aggregate = getFunction(*module, "aggregate");
-  auto aggregateOperators = getOperators(*module, "aggregate");
+  auto aggregateOperators = getOperators(aggregate);
   ASSERT_EQ(aggregateOperators.size(), 1u);
   CommutationAnalysis aggregateAnalysis(aggregate.front());
   expectPair(aggregateAnalysis, aggregateOperators[0], aggregateOperators[0],
@@ -502,7 +459,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
              CommutationReason::UnsupportedQuantumOperandType);
 
   auto duplicate = getFunction(*module, "duplicate_role");
-  auto duplicateOperators = getOperators(*module, "duplicate_role");
+  auto duplicateOperators = getOperators(duplicate);
   ASSERT_EQ(duplicateOperators.size(), 1u);
   CommutationAnalysis duplicateAnalysis(duplicate.front());
   expectPair(duplicateAnalysis, duplicateOperators[0], duplicateOperators[0],
@@ -510,7 +467,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
              CommutationReason::DuplicateQubitOperand);
 
   auto dynamicPauli = getFunction(*module, "dynamic_pauli");
-  auto dynamicOperators = getOperators(*module, "dynamic_pauli");
+  auto dynamicOperators = getOperators(dynamicPauli);
   ASSERT_EQ(dynamicOperators.size(), 2u);
   CommutationAnalysis dynamicAnalysis(dynamicPauli.front());
   expectPair(dynamicAnalysis, dynamicOperators[0], dynamicOperators[1],
@@ -518,7 +475,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
              CommutationReason::UnsupportedPauliWord);
 
   auto callResult = getFunction(*module, "call_result");
-  auto callOperators = getOperators(*module, "call_result");
+  auto callOperators = getOperators(callResult);
   ASSERT_EQ(callOperators.size(), 2u);
   CommutationAnalysis callAnalysis(callResult.front());
   expectPair(callAnalysis, callOperators[0], callOperators[1],
@@ -526,7 +483,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
              CommutationReason::UnmappedQubitId);
 
   auto opaque = getFunction(*module, "opaque_unitaries");
-  auto opaqueOperators = getOperators(*module, "opaque_unitaries");
+  auto opaqueOperators = getOperators(opaque);
   ASSERT_EQ(opaqueOperators.size(), 6u);
   CommutationAnalysis opaqueAnalysis(opaque.front());
   expectPair(opaqueAnalysis, opaqueOperators[0], opaqueOperators[1],
@@ -541,7 +498,7 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
              CommutationReason::NoApplicableRule);
 
   auto constant = getFunction(*module, "constant_unitaries");
-  auto constantOperators = getOperators(*module, "constant_unitaries");
+  auto constantOperators = getOperators(constant);
   ASSERT_EQ(constantOperators.size(), 2u);
   CommutationAnalysis constantAnalysis(constant.front());
   expectPair(constantAnalysis, constantOperators[0], constantOperators[1],
@@ -573,7 +530,7 @@ TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
   ASSERT_TRUE(module);
 
   auto mixed = getFunction(*module, "mixed_results");
-  auto mixedOperators = getOperators(*module, "mixed_results");
+  auto mixedOperators = getOperators(mixed);
   ASSERT_EQ(mixedOperators.size(), 3u);
   CommutationAnalysis mixedAnalysis(mixed.front());
   expectPair(mixedAnalysis, mixedOperators[0], mixedOperators[1],
@@ -583,7 +540,8 @@ TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
              CommutationStatus::Commutes,
              CommutationReason::CompatibleControlledTargets);
 
-  auto otherOperators = getOperators(*module, "other");
+  auto other = getFunction(*module, "other");
+  auto otherOperators = getOperators(other);
   ASSERT_EQ(otherOperators.size(), 1u);
   expectPair(mixedAnalysis, mixedOperators[0], otherOperators[0],
              CommutationStatus::Indeterminate,
@@ -591,21 +549,33 @@ TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
 }
 
 TEST_F(CommutationAnalysisTest, RebuildAfterMutation) {
-  auto function = createMutationKernel();
-  Value q0 = createWire();
-  Value q1 = createWire();
-  auto x = createGate<cudaq::quake::XOp>(q0);
-  auto h = createGate<cudaq::quake::HOp>(q1);
-  finishFunction();
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @mutation() {
+        %q0 = quake.null_wire
+        %q1 = quake.null_wire
+        %x = quake.x %q0 : (!quake.wire) -> !quake.wire
+        %h = quake.h %q1 : (!quake.wire) -> !quake.wire
+        quake.sink %x : !quake.wire
+        quake.sink %h : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+  auto function = getFunction(*module, "mutation");
+  auto operators = getOperators(function);
+  ASSERT_EQ(operators.size(), 2u);
   {
     CommutationAnalysis analysis(function.front());
-    EXPECT_TRUE(analysis.canCommute(x, h));
+    EXPECT_TRUE(analysis.canCommute(operators[0], operators[1]));
   }
 
-  x.getWires().front().getUses().begin()->getOwner()->erase();
-  h->setOperand(0, x.getWires().front());
+  Value xResult = operators[0]->getResult(0);
+  xResult.getUses().begin()->getOwner()->erase();
+  operators[1]->setOperand(0, xResult);
   ASSERT_TRUE(succeeded(verify(*module)));
   CommutationAnalysis rebuilt(function.front());
-  expectPair(rebuilt, x, h, CommutationStatus::Indeterminate,
+  expectPair(rebuilt, operators[0], operators[1],
+             CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);
 }
