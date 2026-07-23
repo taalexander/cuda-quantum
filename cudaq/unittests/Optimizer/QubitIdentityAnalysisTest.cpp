@@ -45,6 +45,14 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
             : (!quake.wire) -> !quake.control
         %returned = quake.from_ctrl %control
             : (!quake.control) -> !quake.wire
+        %mixedWireControl = quake.null_wire
+        %mixedControlWire = quake.null_wire
+        %mixedTarget = quake.null_wire
+        %mixedControl = quake.to_ctrl %mixedControlWire
+            : (!quake.wire) -> !quake.control
+        %mixedResults:2 = quake.x [%mixedWireControl, %mixedControl] %mixedTarget
+            : (!quake.wire, !quake.control, !quake.wire)
+              -> (!quake.wire, !quake.wire)
 
         %borrow0a = quake.borrow_wire @wires[0] : !quake.wire
         quake.return_wire %borrow0a : !quake.wire
@@ -58,6 +66,8 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
         %unwrapped = quake.unwrap %reference : (!quake.ref) -> !quake.wire
         quake.sink %returned : !quake.wire
         quake.sink %measuredDistinct : !quake.wire
+        quake.sink %mixedResults#0 : !quake.wire
+        quake.sink %mixedResults#1 : !quake.wire
         quake.sink %call : !quake.wire
         quake.sink %wireArg : !quake.wire
         %controlArgumentWire = quake.from_ctrl %controlArg
@@ -86,11 +96,11 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
   auto borrows = llvm::to_vector(block.getOps<cudaq::quake::BorrowWireOp>());
   auto calls = llvm::to_vector(block.getOps<func::CallOp>());
   auto unwraps = llvm::to_vector(block.getOps<cudaq::quake::UnwrapOp>());
-  ASSERT_EQ(nullWires.size(), 2u);
-  ASSERT_EQ(xOps.size(), 1u);
+  ASSERT_EQ(nullWires.size(), 5u);
+  ASSERT_EQ(xOps.size(), 2u);
   ASSERT_EQ(resets.size(), 1u);
   ASSERT_EQ(measurements.size(), 1u);
-  ASSERT_EQ(toControls.size(), 1u);
+  ASSERT_EQ(toControls.size(), 2u);
   ASSERT_EQ(fromControls.size(), 2u);
   ASSERT_EQ(borrows.size(), 3u);
   ASSERT_EQ(calls.size(), 1u);
@@ -99,6 +109,7 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
   Value initial = nullWires[0].getResult();
   Value distinct = nullWires[1].getResult();
   auto x = xOps[0];
+  auto mixedX = xOps[1];
   auto reset = resets[0];
   auto measurement = measurements[0];
   auto control = toControls[0];
@@ -120,6 +131,14 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
   EXPECT_EQ(initialId, analysis.getQubitId(measurement.getWires().front()));
   EXPECT_EQ(initialId, analysis.getQubitId(control));
   EXPECT_EQ(initialId, analysis.getQubitId(returned));
+
+  // Operator wire results follow wire controls and targets in operand order;
+  // !quake.control operands do not produce replacement wire results.
+  ASSERT_EQ(mixedX.getWires().size(), 2u);
+  EXPECT_EQ(analysis.getQubitId(mixedX.getControls()[0]),
+            analysis.getQubitId(mixedX.getWires()[0]));
+  EXPECT_EQ(analysis.getQubitId(mixedX.getTargets()[0]),
+            analysis.getQubitId(mixedX.getWires()[1]));
 
   // Scalar block arguments and null wires introduce distinct local identities.
   ASSERT_TRUE(analysis.getQubitId(function.getArgument(0)));

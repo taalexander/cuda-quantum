@@ -317,7 +317,8 @@ static bool hasTargetControlCrossover(const OperationView &lhs,
          });
 }
 
-// Check that a diagonal operation shares only controls of the other operation.
+// Check whether all shared support of a computational-basis-diagonal operation
+// occurs only among the other operation's controls.
 static bool diagonalOverlapsOnlyControls(const OperationView &diagonal,
                                          const OperationView &controlled) {
   if (!isComputationalDiagonal(diagonal.operation) ||
@@ -449,9 +450,14 @@ tryPauliParity(const OperationView &lhs, const OperationView &rhs) {
   return std::nullopt;
 }
 
-// A diagonal action D commutes with a computational-basis control projector P
-// because DP = PD. This applies when every shared qubit is only a control of
-// the other operation, never one of its targets.
+// Quake control polarity selects a computational-basis projector P. A diagonal
+// action D on that control satisfies DP = PD for either polarity, so the proof
+// holds for every input state. This applies when every shared qubit is only a
+// control of the other operation, never one of its targets.
+// TODO: This rule cannot recognize a control basis established by surrounding
+// basis changes, such as H-C(U)-H. Sequence-level basis tracking would cover
+// those cases, while reusable per-operand commuting-basis properties would
+// avoid hard-coding the supported individual operations.
 static std::optional<CommutationResult>
 tryDiagonalOnControls(const OperationView &lhs, const OperationView &rhs) {
   if (diagonalOverlapsOnlyControls(lhs, rhs) ||

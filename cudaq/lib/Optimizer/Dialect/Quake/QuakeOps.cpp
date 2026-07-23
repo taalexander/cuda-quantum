@@ -63,7 +63,7 @@ static LogicalResult verifyWireResultsAreLinear(Operation *op) {
 // Verify invariants shared by Quake operators: control polarity metadata must
 // align with control operands, and value-form wire results must remain linear.
 static LogicalResult
-verifyQuakeOperator(cudaq::quake::OperatorInterface operatorInterface) {
+verifyOperator(cudaq::quake::OperatorInterface operatorInterface) {
   auto controlPolarities = operatorInterface.getNegatedControls();
   if (controlPolarities &&
       controlPolarities->size() != operatorInterface.getControls().size())
@@ -598,8 +598,7 @@ LogicalResult cudaq::quake::ExpPauliOp::verify() {
   }
   if (!(getParameters().empty() || getParameters().size() == 1))
     return emitOpError("can only have 0 or 1 parameter");
-  return verifyQuakeOperator(
-      cast<cudaq::quake::OperatorInterface>(getOperation()));
+  return verifyOperator(cast<cudaq::quake::OperatorInterface>(getOperation()));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1245,8 +1244,7 @@ LogicalResult cudaq::quake::CustomUnitaryCallOp::verify() {
   auto fn = SymbolTable::lookupNearestSymbolFrom<func::FuncOp>(*this, gen);
   if (!fn)
     return emitOpError("symbol must be a func.func");
-  return verifyQuakeOperator(
-      cast<cudaq::quake::OperatorInterface>(getOperation()));
+  return verifyOperator(cast<cudaq::quake::OperatorInterface>(getOperation()));
 }
 
 void cudaq::quake::CustomUnitaryConstantOp::getOperatorMatrix(Matrix &matrix) {
@@ -1335,8 +1333,7 @@ LogicalResult cudaq::quake::CustomUnitaryConstantOp::verify() {
           "Invalid matrix size, required 2^N * 2^N for N-qubit operation");
   }
 
-  return verifyQuakeOperator(
-      cast<cudaq::quake::OperatorInterface>(getOperation()));
+  return verifyOperator(cast<cudaq::quake::OperatorInterface>(getOperation()));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1457,7 +1454,7 @@ QUANTUM_OPS(INSTANTIATE_CALLBACKS)
 
 #define INSTANTIATE_OPERATOR_VERIFY(Op)                                        \
   LogicalResult cudaq::quake::Op::verify() {                                   \
-    return verifyQuakeOperator(                                                \
+    return verifyOperator(                                                     \
         cast<cudaq::quake::OperatorInterface>(getOperation()));                \
   }
 
