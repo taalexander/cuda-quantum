@@ -153,8 +153,6 @@ TEST(CommutationResultTest, ResultContract) {
        "unsupported-operation-kind"},
       {CommutationReason::UnsupportedQuantumOperandType,
        "unsupported-quantum-operand-type"},
-      {CommutationReason::MalformedControlPolarity,
-       "malformed-control-polarity"},
       {CommutationReason::UnmappedQubitId, "unmapped-qubit-id"},
       {CommutationReason::DuplicateQubitOperand, "duplicate-qubit-operand"},
       {CommutationReason::UnsupportedPauliWord, "unsupported-pauli-word"},
@@ -419,17 +417,13 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
   auto module = parseModule(R"mlir(
     module {
       func.func private @wire_source() -> !quake.wire
+      func.func private @unitary_generator()
+      func.func private @other_unitary_generator()
       func.func @conservative() {
-        %angle = arith.constant 5.0e-1 : f64
         %q0 = quake.null_wire
-        %q1 = quake.null_wire
         %x = quake.x %q0 : (!quake.wire) -> !quake.wire
         %h = quake.h %x : (!quake.wire) -> !quake.wire
-        %control = quake.to_ctrl %q1 : (!quake.wire) -> !quake.control
-        %controlled = quake.x [%control neg [true, false]] %h : (!quake.control, !quake.wire) -> !quake.wire
-        %exp = quake.exp_pauli (%angle) %controlled to "XX" : (f64, !quake.wire) -> !quake.wire
-        %z = quake.z %exp : (!quake.wire) -> !quake.wire
-        quake.sink %z : !quake.wire
+        quake.sink %h : !quake.wire
         return
       }
       func.func @aggregate(%q: !quake.veq<2>) {
@@ -452,10 +446,42 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
         quake.sink %z : !quake.wire
         return
       }
+      func.func @call_result() {
+        %q = call @wire_source() : () -> !quake.wire
+        %x = quake.x %q : (!quake.wire) -> !quake.wire
+        %z = quake.z %x : (!quake.wire) -> !quake.wire
+        quake.sink %z : !quake.wire
+        return
+      }
+      func.func @opaque_unitaries() {
+        %angle0 = arith.constant 2.5e-1 : f64
+        %angle1 = arith.constant 5.0e-1 : f64
+        %q0 = quake.null_wire
+        %q1 = quake.null_wire
+        %q2 = quake.null_wire
+        %u0 = quake.custom_unitary_call @unitary_generator %q0 : (!quake.wire) -> !quake.wire
+        %u1 = quake.custom_unitary_call @unitary_generator %q1 : (!quake.wire) -> !quake.wire
+        %u2 = quake.custom_unitary_call @unitary_generator<adj> %u0 : (!quake.wire) -> !quake.wire
+        %u3 = quake.custom_unitary_call @other_unitary_generator %u2 : (!quake.wire) -> !quake.wire
+        %u4 = quake.custom_unitary_call @unitary_generator(%angle0) %q2 : (f64, !quake.wire) -> !quake.wire
+        %u5 = quake.custom_unitary_call @unitary_generator(%angle1) %u4 : (f64, !quake.wire) -> !quake.wire
+        quake.sink %u1 : !quake.wire
+        quake.sink %u3 : !quake.wire
+        quake.sink %u5 : !quake.wire
+        return
+      }
+      func.func @constant_unitaries() {
+        %q = quake.null_wire
+        %u0 = quake.custom_unitary_constant @unitary_matrix %q : (!quake.wire) -> !quake.wire
+        %u1 = quake.custom_unitary_constant @unitary_matrix<adj> %u0 : (!quake.wire) -> !quake.wire
+        quake.sink %u1 : !quake.wire
+        return
+      }
+      cc.global constant private @unitary_matrix (dense<[(1.000000e+00,0.000000e+00), (0.000000e+00,0.000000e+00), (0.000000e+00,0.000000e+00), (1.000000e+00,0.000000e+00)]> : tensor<4xcomplex<f64>>) : !cc.array<complex<f64> x 4>
     })mlir");
   ASSERT_TRUE(module);
   auto operators = getOperators(*module, "conservative");
-  ASSERT_EQ(operators.size(), 5u);
+  ASSERT_EQ(operators.size(), 2u);
   auto function = getFunction(*module, "conservative");
   auto *returnOp = function.front().getTerminator();
   CommutationAnalysis analysis(function.front());
@@ -466,12 +492,6 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
   expectPair(analysis, operators[0], operators[1],
              CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);
-  expectPair(analysis, operators[2], operators[4],
-             CommutationStatus::Indeterminate,
-             CommutationReason::MalformedControlPolarity);
-  expectPair(analysis, operators[3], operators[4],
-             CommutationStatus::Indeterminate,
-             CommutationReason::UnsupportedPauliWord);
 
   auto aggregate = getFunction(*module, "aggregate");
   auto aggregateOperators = getOperators(*module, "aggregate");
@@ -496,46 +516,45 @@ TEST_F(CommutationAnalysisTest, ConservativeOutcomes) {
   expectPair(dynamicAnalysis, dynamicOperators[0], dynamicOperators[1],
              CommutationStatus::Indeterminate,
              CommutationReason::UnsupportedPauliWord);
+
+  auto callResult = getFunction(*module, "call_result");
+  auto callOperators = getOperators(*module, "call_result");
+  ASSERT_EQ(callOperators.size(), 2u);
+  CommutationAnalysis callAnalysis(callResult.front());
+  expectPair(callAnalysis, callOperators[0], callOperators[1],
+             CommutationStatus::Indeterminate,
+             CommutationReason::UnmappedQubitId);
+
+  auto opaque = getFunction(*module, "opaque_unitaries");
+  auto opaqueOperators = getOperators(*module, "opaque_unitaries");
+  ASSERT_EQ(opaqueOperators.size(), 6u);
+  CommutationAnalysis opaqueAnalysis(opaque.front());
+  expectPair(opaqueAnalysis, opaqueOperators[0], opaqueOperators[1],
+             CommutationStatus::Commutes, CommutationReason::DisjointSupport);
+  expectPair(opaqueAnalysis, opaqueOperators[0], opaqueOperators[2],
+             CommutationStatus::Commutes, CommutationReason::SameOperation);
+  expectPair(opaqueAnalysis, opaqueOperators[0], opaqueOperators[3],
+             CommutationStatus::Indeterminate,
+             CommutationReason::NoApplicableRule);
+  expectPair(opaqueAnalysis, opaqueOperators[4], opaqueOperators[5],
+             CommutationStatus::Indeterminate,
+             CommutationReason::NoApplicableRule);
+
+  auto constant = getFunction(*module, "constant_unitaries");
+  auto constantOperators = getOperators(*module, "constant_unitaries");
+  ASSERT_EQ(constantOperators.size(), 2u);
+  CommutationAnalysis constantAnalysis(constant.front());
+  expectPair(constantAnalysis, constantOperators[0], constantOperators[1],
+             CommutationStatus::Commutes, CommutationReason::SameOperation);
 }
 
 TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
   auto module = parseModule(R"mlir(
     module {
-      quake.wire_set @wires[2]
-      func.func private @wire_source() -> !quake.wire
-      func.func @borrowed() {
-        %q0a = quake.borrow_wire @wires[0] : !quake.wire
-        %x0a = quake.x %q0a : (!quake.wire) -> !quake.wire
-        quake.return_wire %x0a : !quake.wire
-        %q0b = quake.borrow_wire @wires[0] : !quake.wire
-        %x0b = quake.x %q0b : (!quake.wire) -> !quake.wire
-        quake.return_wire %x0b : !quake.wire
-        %q1 = quake.borrow_wire @wires[1] : !quake.wire
-        %h1 = quake.h %q1 : (!quake.wire) -> !quake.wire
-        quake.return_wire %h1 : !quake.wire
-        return
-      }
-      func.func @converted() {
-        %angle = arith.constant 5.0e-1 : f64
-        %q = quake.null_wire
-        %x = quake.x %q : (!quake.wire) -> !quake.wire
-        %control = quake.to_ctrl %x : (!quake.wire) -> !quake.control
-        %wire = quake.from_ctrl %control : (!quake.control) -> !quake.wire
-        %rx = quake.rx (%angle) %wire : (f64, !quake.wire) -> !quake.wire
-        quake.sink %rx : !quake.wire
-        return
-      }
       func.func @other() {
         %q = quake.null_wire
         %z = quake.z %q : (!quake.wire) -> !quake.wire
         quake.sink %z : !quake.wire
-        return
-      }
-      func.func @arguments(%q0: !quake.wire, %q1: !quake.wire) {
-        %x = quake.x %q0 : (!quake.wire) -> !quake.wire
-        %h = quake.h %q1 : (!quake.wire) -> !quake.wire
-        quake.sink %x : !quake.wire
-        quake.sink %h : !quake.wire
         return
       }
       func.func @mixed_results() {
@@ -550,54 +569,8 @@ TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
         quake.sink %target_x : !quake.wire
         return
       }
-      func.func @nonunitary_flow() {
-        %angle = arith.constant 5.0e-1 : f64
-        %q = quake.null_wire
-        %reset = quake.reset %q : (!quake.wire) -> !quake.wire
-        %measure, %wire = quake.mz %reset : (!quake.wire) -> (!quake.measure, !quake.wire)
-        %x = quake.x %wire : (!quake.wire) -> !quake.wire
-        %rx = quake.rx (%angle) %x : (f64, !quake.wire) -> !quake.wire
-        quake.sink %rx : !quake.wire
-        return
-      }
-      func.func @call_result() {
-        %q = call @wire_source() : () -> !quake.wire
-        %x = quake.x %q : (!quake.wire) -> !quake.wire
-        %z = quake.z %x : (!quake.wire) -> !quake.wire
-        quake.sink %z : !quake.wire
-        return
-      }
     })mlir");
   ASSERT_TRUE(module);
-
-  auto borrowed = getFunction(*module, "borrowed");
-  auto borrowedOperators = getOperators(*module, "borrowed");
-  ASSERT_EQ(borrowedOperators.size(), 3u);
-  CommutationAnalysis borrowedAnalysis(borrowed.front());
-  expectPair(borrowedAnalysis, borrowedOperators[0], borrowedOperators[1],
-             CommutationStatus::Commutes, CommutationReason::SameOperation);
-  expectPair(borrowedAnalysis, borrowedOperators[0], borrowedOperators[2],
-             CommutationStatus::Commutes, CommutationReason::DisjointSupport);
-
-  auto converted = getFunction(*module, "converted");
-  auto convertedOperators = getOperators(*module, "converted");
-  ASSERT_EQ(convertedOperators.size(), 2u);
-  CommutationAnalysis convertedAnalysis(converted.front());
-  expectPair(convertedAnalysis, convertedOperators[0], convertedOperators[1],
-             CommutationStatus::Commutes, CommutationReason::SameAxis);
-
-  auto otherOperators = getOperators(*module, "other");
-  ASSERT_EQ(otherOperators.size(), 1u);
-  expectPair(convertedAnalysis, convertedOperators[0], otherOperators[0],
-             CommutationStatus::Indeterminate,
-             CommutationReason::DifferentBlocks);
-
-  auto arguments = getFunction(*module, "arguments");
-  auto argumentOperators = getOperators(*module, "arguments");
-  ASSERT_EQ(argumentOperators.size(), 2u);
-  CommutationAnalysis argumentAnalysis(arguments.front());
-  expectPair(argumentAnalysis, argumentOperators[0], argumentOperators[1],
-             CommutationStatus::Commutes, CommutationReason::DisjointSupport);
 
   auto mixed = getFunction(*module, "mixed_results");
   auto mixedOperators = getOperators(*module, "mixed_results");
@@ -610,20 +583,11 @@ TEST_F(CommutationAnalysisTest, BlockLocalQubitIds) {
              CommutationStatus::Commutes,
              CommutationReason::CompatibleControlledTargets);
 
-  auto nonunitaryFlow = getFunction(*module, "nonunitary_flow");
-  auto nonunitaryOperators = getOperators(*module, "nonunitary_flow");
-  ASSERT_EQ(nonunitaryOperators.size(), 2u);
-  CommutationAnalysis nonunitaryAnalysis(nonunitaryFlow.front());
-  expectPair(nonunitaryAnalysis, nonunitaryOperators[0], nonunitaryOperators[1],
-             CommutationStatus::Commutes, CommutationReason::SameAxis);
-
-  auto callResult = getFunction(*module, "call_result");
-  auto callOperators = getOperators(*module, "call_result");
-  ASSERT_EQ(callOperators.size(), 2u);
-  CommutationAnalysis callAnalysis(callResult.front());
-  expectPair(callAnalysis, callOperators[0], callOperators[1],
+  auto otherOperators = getOperators(*module, "other");
+  ASSERT_EQ(otherOperators.size(), 1u);
+  expectPair(mixedAnalysis, mixedOperators[0], otherOperators[0],
              CommutationStatus::Indeterminate,
-             CommutationReason::UnmappedQubitId);
+             CommutationReason::DifferentBlocks);
 }
 
 TEST_F(CommutationAnalysisTest, RebuildAfterMutation) {
@@ -638,7 +602,9 @@ TEST_F(CommutationAnalysisTest, RebuildAfterMutation) {
     EXPECT_TRUE(analysis.canCommute(x, h));
   }
 
-  h->setOperand(0, x.getTarget());
+  x.getWires().front().getUses().begin()->getOwner()->erase();
+  h->setOperand(0, x.getWires().front());
+  ASSERT_TRUE(succeeded(verify(*module)));
   CommutationAnalysis rebuilt(function.front());
   expectPair(rebuilt, x, h, CommutationStatus::Indeterminate,
              CommutationReason::NoApplicableRule);

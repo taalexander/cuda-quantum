@@ -30,8 +30,8 @@ enum class CommutationReason {
   // Reasons paired with CommutationStatus::Commutes.
   /// The operations have disjoint block-local quantum support.
   DisjointSupport,
-  /// The supported operations have the same action and placement, optionally
-  /// with opposite adjoint states.
+  /// The recognized operations have the same structural action and placement,
+  /// optionally with opposite adjoint states.
   SameOperation,
   /// Both operations are diagonal in the computational basis.
   ComputationalDiagonal,
@@ -63,14 +63,12 @@ enum class CommutationReason {
   UnsupportedOperationKind,
   /// A quantum operand is not a supported scalar wire or control value.
   UnsupportedQuantumOperandType,
-  /// Control polarity metadata does not match the control operands.
-  MalformedControlPolarity,
   /// A quantum operand has no analysis-local qubit identifier.
   UnmappedQubitId,
-  /// An operation uses the same physical qubit in more than one control or
+  /// An operation uses the same virtual qubit in more than one control or
   /// target position.
   DuplicateQubitOperand,
-  /// An `ExpPauli` word is dynamic or is not aligned literal `I/X/Y/Z` data.
+  /// An `ExpPauli` word is dynamic.
   UnsupportedPauliWord,
   /// Supported operations did not satisfy an available structural rule.
   NoApplicableRule
@@ -100,17 +98,20 @@ struct CommutationResult {
 /// supported scalar `!quake.wire` or `!quake.control` values. Operations on
 /// disjoint qubits commute regardless of their operator kind. For overlapping
 /// qubits, the analysis applies structural rules for recognized built-in Quake
-/// operators. It does not infer overlapping-support semantics from custom
-/// unitary matrices or dynamic Pauli words.
+/// operators. Custom unitaries with the same defining symbol, exact parameters,
+/// controls, and targets are also recognized as the same operation. The
+/// analysis does not inspect custom-unitary matrices or infer
+/// overlapping-support semantics from different custom definitions or dynamic
+/// Pauli words.
 ///
 /// `DoesNotCommute` is returned only for the limited cases where an available
-/// rule proves noncommutation. `Indeterminate` means that the available rules
-/// established neither result. It does not imply either commutation or
-/// noncommutation.
+/// rule proves that the operations do not commute. `Indeterminate` means that
+/// the available rules established neither result. It does not imply either
+/// commutation or a failure to commute.
 ///
 /// Compiler transformations must treat both `DoesNotCommute` and
 /// `Indeterminate` as not safe to reorder. The separate statuses preserve the
-/// distinction between proven noncommutation and the absence of a proof.
+/// distinction between a proven failure to commute and the absence of a proof.
 ///
 /// Qubit identity is followed through supported scalar wire/control value
 /// forms, including operators, measurement, and reset. The analysis does not

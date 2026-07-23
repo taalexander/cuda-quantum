@@ -113,12 +113,15 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
   QubitIdentityAnalysis analysis(function.front());
   auto initialId = analysis.getQubitId(initial);
   ASSERT_TRUE(initialId);
+  // State-changing and control-conversion operations preserve virtual-qubit
+  // identity as they replace their scalar SSA inputs.
   EXPECT_EQ(initialId, analysis.getQubitId(x.getWires().front()));
   EXPECT_EQ(initialId, analysis.getQubitId(reset.getWires().front()));
   EXPECT_EQ(initialId, analysis.getQubitId(measurement.getWires().front()));
   EXPECT_EQ(initialId, analysis.getQubitId(control));
   EXPECT_EQ(initialId, analysis.getQubitId(returned));
 
+  // Scalar block arguments and null wires introduce distinct local identities.
   ASSERT_TRUE(analysis.getQubitId(function.getArgument(0)));
   ASSERT_TRUE(analysis.getQubitId(function.getArgument(1)));
   EXPECT_EQ(analysis.getQubitId(function.getArgument(1)),
@@ -127,8 +130,13 @@ TEST(QubitIdentityAnalysisTest, TracksQubitIdentity) {
   EXPECT_NE(initialId, analysis.getQubitId(distinct));
   EXPECT_EQ(analysis.getQubitId(distinct),
             analysis.getQubitId(measurement.getWires()[1]));
+
+  // A returned and reborrowed wire retains its wire-set identity, while a
+  // different wire-set index identifies a different virtual qubit.
   EXPECT_EQ(analysis.getQubitId(borrow0a), analysis.getQubitId(borrow0b));
   EXPECT_NE(analysis.getQubitId(borrow0a), analysis.getQubitId(borrow1));
+
+  // Aggregate, call, and reference lineage is deliberately unsupported.
   EXPECT_FALSE(analysis.getQubitId(function.getArgument(2)));
   EXPECT_FALSE(analysis.getQubitId(call.getResult(0)));
   EXPECT_FALSE(analysis.getQubitId(unwrapped.getResult()));

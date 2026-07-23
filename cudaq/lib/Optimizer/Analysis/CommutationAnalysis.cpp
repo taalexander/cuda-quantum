@@ -120,8 +120,7 @@ static bool isZAxis(Operation *operation) {
 }
 
 static bool isComputationalDiagonal(Operation *operation) {
-  // TODO: Add other computational-basis diagonal operations here without
-  // broadening the single-target Z-axis predicate.
+  // The initial rule set recognizes the shared single-target Z-axis family.
   return isZAxis(operation);
 }
 
@@ -166,8 +165,7 @@ static std::optional<PauliWord> getLiteralPaulis(const OperationView &view) {
   if (!expPauli)
     return std::nullopt;
   auto literal = expPauli.getPauliLiteralAttr();
-  // TODO: Move literal/target alignment into the ExpPauli verifier.
-  if (!literal || literal.getValue().size() != view.targets.size())
+  if (!literal)
     return std::nullopt;
   return cudaq::quake::symbolizePauliWord(literal.getValue());
 }
@@ -177,21 +175,40 @@ static bool hasSupportedPauliWord(const OperationView &view) {
          getLiteralPaulis(view).has_value();
 }
 
+static bool haveSameCustomUnitaryDefinition(Operation *lhs, Operation *rhs) {
+  if (auto lhsCall = dyn_cast<cudaq::quake::CustomUnitaryCallOp>(lhs)) {
+    auto rhsCall = dyn_cast<cudaq::quake::CustomUnitaryCallOp>(rhs);
+    return rhsCall && lhsCall.getGeneratorAttr() == rhsCall.getGeneratorAttr();
+  }
+  if (auto lhsConstant = dyn_cast<cudaq::quake::CustomUnitaryConstantOp>(lhs)) {
+    auto rhsConstant = dyn_cast<cudaq::quake::CustomUnitaryConstantOp>(rhs);
+    return rhsConstant &&
+           lhsConstant.getMatrixAttr() == rhsConstant.getMatrixAttr();
+  }
+  return false;
+}
+
 static bool haveSameOperation(const OperationView &lhs,
                               const OperationView &rhs) {
   // Match the operation kind and every action-bearing interface value. Adjoint
   // state may differ because an operation commutes with its exact inverse.
-  if (!isSupportedSharedOperation(lhs.operation) ||
-      !isSupportedSharedOperation(rhs.operation) ||
-      lhs.operation->getName() != rhs.operation->getName() ||
-      lhs.controls != rhs.controls || !haveSameTargets(lhs, rhs) ||
+  bool sameRecognizedKind =
+      (isSupportedSharedOperation(lhs.operation) &&
+       isSupportedSharedOperation(rhs.operation) &&
+       lhs.operation->getName() == rhs.operation->getName()) ||
+      haveSameCustomUnitaryDefinition(lhs.operation, rhs.operation);
+  if (!sameRecognizedKind || lhs.controls != rhs.controls ||
+      !haveSameTargets(lhs, rhs) ||
       !haveExactParameters(lhs.interface, rhs.interface))
     return false;
 
   // ExpPauli stores part of its action in the Pauli word rather than among the
   // OperatorInterface parameters.
-  if (isa<cudaq::quake::ExpPauliOp>(lhs.operation))
-    return getLiteralPaulis(lhs) == getLiteralPaulis(rhs);
+  if (isa<cudaq::quake::ExpPauliOp>(lhs.operation)) {
+    auto lhsPaulis = getLiteralPaulis(lhs);
+    auto rhsPaulis = getLiteralPaulis(rhs);
+    return lhsPaulis && rhsPaulis && lhsPaulis == rhsPaulis;
+  }
   return true;
 }
 
@@ -456,7 +473,6 @@ static CommutationResult dispatchRules(const OperationView &lhs,
                                        const OperationView &rhs) {
   // Rule order determines which successful proof reason is reported.
   static constexpr CommutationRule orderedRules[] = {
-      trySameOperation,
       tryComputationalDiagonal,
       trySameAxis,
       tryPauliParity,
@@ -474,9 +490,6 @@ static std::optional<CommutationReason>
 getView(OperationView &view, const QubitIdentityAnalysis &qubitIdentity) {
   auto negatedControls = view.interface.getNegatedControls();
   auto controls = view.interface.getControls();
-  // TODO: Move polarity/control alignment into the Quake operator verifier.
-  if (negatedControls && negatedControls->size() != controls.size())
-    return CommutationReason::MalformedControlPolarity;
 
   llvm::DenseSet<QubitId> seenQubitIds;
   view.controls.reserve(controls.size());
@@ -529,6 +542,8 @@ static CommutationResult evaluate(Operation *lhs, Operation *rhs,
 
   if (auto result = tryDisjointSupport(lhsView, rhsView))
     return *result;
+  if (auto result = trySameOperation(lhsView, rhsView))
+    return *result;
   if (!isSupportedSharedOperation(lhs) || !isSupportedSharedOperation(rhs))
     return indeterminate(CommutationReason::NoApplicableRule);
   if (!hasSupportedPauliWord(lhsView) || !hasSupportedPauliWord(rhsView))
@@ -565,8 +580,6 @@ cudaq::quake::detail::getCommutationReasonId(CommutationReason reason) {
     return "unsupported-operation-kind";
   case CommutationReason::UnsupportedQuantumOperandType:
     return "unsupported-quantum-operand-type";
-  case CommutationReason::MalformedControlPolarity:
-    return "malformed-control-polarity";
   case CommutationReason::UnmappedQubitId:
     return "unmapped-qubit-id";
   case CommutationReason::DuplicateQubitOperand:
