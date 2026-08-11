@@ -70,6 +70,9 @@ This includes all gate counts.)#")
       .def_prop_ro("depth", &Resources::getCircuitDepth,
                    "The circuit depth (longest gate chain on any qubit).\n")
       .def_prop_ro(
+          "t_depth", &Resources::getTDepth,
+          "Dependency-aware T-family depth, counting T and T-dagger layers.\n")
+      .def_prop_ro(
           "gate_count_by_arity",
           [](Resources &self) { return self.getGateCountsByArity(); },
           "Gate counts by qubit arity, as a dict mapping arity to count.\n")
