@@ -10,6 +10,7 @@
 #include "cudaq/Optimizer/Builder/RuntimeNames.h"
 #include "cudaq/Optimizer/Transforms/CommutationAwareRewrite.h"
 #include "cudaq/Optimizer/Transforms/Passes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -25,6 +26,11 @@ namespace cudaq::opt {
 #define DEBUG_TYPE "quake-simplify"
 
 using namespace mlir;
+
+static bool valueDominates(Operation *operation, Value value) {
+  DominanceInfo dominance(operation->getParentOp());
+  return dominance.dominates(value, operation);
+}
 
 // Apply simple quantum optimizations to value-semantics Quake.
 // Commutation-aware rewrites are supported for scalar wire controls and
@@ -82,12 +88,11 @@ static LogicalResult
 cancelTransparentPair(QOP anchor,
                       cudaq::opt::CommutationAwareRewriteMatcher &matcher,
                       PatternRewriter &rewriter, IsEndpoint isEndpoint) {
-  auto match = matcher.findNearest(
-      anchor, cudaq::opt::CommutationSearchDirection::Forward, isEndpoint);
+  auto match = matcher.findNearest(anchor, isEndpoint);
   if (!match)
     return failure();
 
-  cancelPair(anchor, cast<QOP>(match->endpoint), rewriter);
+  cancelPair(anchor, cast<QOP>(match), rewriter);
   return success();
 }
 
@@ -268,16 +273,14 @@ public:
 
     // Stop at the first structurally matching action. Checking phi afterward
     // keeps a different axis as a barrier instead of searching past it.
-    auto match = matcher.findNearest(
-        anchor, cudaq::opt::CommutationSearchDirection::Forward,
-        [&](Operation *candidate) {
-          return static_cast<bool>(
-              getSameActionEndpoint(anchor, candidate, matcher));
-        });
+    auto match = matcher.findNearest(anchor, [&](Operation *candidate) {
+      return static_cast<bool>(
+          getSameActionEndpoint(anchor, candidate, matcher));
+    });
     if (!match)
       return failure();
 
-    auto endpoint = cast<cudaq::quake::PhasedRxOp>(match->endpoint);
+    auto endpoint = cast<cudaq::quake::PhasedRxOp>(match);
     auto endpointParameters = endpoint.getParameters();
     if (endpointParameters.size() != 2 ||
         !haveExactValue(anchorParameters[1], endpointParameters[1]) ||
@@ -293,6 +296,8 @@ public:
       ++combineStat;
       return success();
     }
+    if (!valueDominates(endpoint, anchorTheta))
+      return failure();
 
     {
       OpBuilder::InsertionGuard guard(rewriter);
@@ -348,20 +353,18 @@ public:
     }
 
     Value anchorAngle = parameters.front();
-    auto match = matcher.findNearest(
-        anchor, cudaq::opt::CommutationSearchDirection::Forward,
-        [&](Operation *candidate) {
-          auto endpoint = getSameActionEndpoint(anchor, candidate, matcher);
-          if (!endpoint)
-            return false;
-          auto endpointParameters = endpoint.getParameters();
-          return endpointParameters.size() == 1 &&
-                 endpointParameters.front().getType() == anchorAngle.getType();
-        });
+    auto match = matcher.findNearest(anchor, [&](Operation *candidate) {
+      auto endpoint = getSameActionEndpoint(anchor, candidate, matcher);
+      if (!endpoint)
+        return false;
+      auto endpointParameters = endpoint.getParameters();
+      return endpointParameters.size() == 1 &&
+             endpointParameters.front().getType() == anchorAngle.getType();
+    });
     if (!match)
       return failure();
 
-    auto endpoint = cast<QOP>(match->endpoint);
+    auto endpoint = cast<QOP>(match);
     Value endpointAngle = endpoint.getParameters().front();
     if (anchor.isAdj() != endpoint.isAdj() &&
         haveExactValue(anchorAngle, endpointAngle)) {
@@ -369,6 +372,8 @@ public:
       ++combineStat;
       return success();
     }
+    if (!valueDominates(endpoint, anchorAngle))
+      return failure();
 
     {
       OpBuilder::InsertionGuard guard(rewriter);
@@ -408,16 +413,14 @@ public:
 
   LogicalResult matchAndRewrite(SourceOp anchor,
                                 PatternRewriter &rewriter) const override {
-    auto match = matcher.findNearest(
-        anchor, cudaq::opt::CommutationSearchDirection::Forward,
-        [&](Operation *candidate) {
-          return static_cast<bool>(
-              getSameActionEndpoint(anchor, candidate, matcher));
-        });
+    auto match = matcher.findNearest(anchor, [&](Operation *candidate) {
+      return static_cast<bool>(
+          getSameActionEndpoint(anchor, candidate, matcher));
+    });
     if (!match)
       return failure();
 
-    auto endpoint = cast<SourceOp>(match->endpoint);
+    auto endpoint = cast<SourceOp>(match);
     // Let the inverse-elimination pattern own the opposite-adjoint pair.
     if (anchor.isAdj() != endpoint.isAdj())
       return failure();

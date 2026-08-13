@@ -7,6 +7,7 @@
  ******************************************************************************/
 
 #include "QubitIdentityAnalysis.h"
+#include "cudaq/Optimizer/Analysis/ScalarWireTraversal.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -17,18 +18,6 @@ using namespace mlir;
 using cudaq::quake::detail::QubitIdentityAnalysis;
 using QubitId = QubitIdentityAnalysis::QubitId;
 using BorrowKey = std::pair<Attribute, std::int32_t>;
-
-// Initial construction preserves every identity it can prove independently.
-// An unknown input leaves only its corresponding result unidentified.
-static void
-propagateKnownQubitIds(llvm::DenseMap<Value, QubitId> &qubitIds,
-                       const cudaq::quake::detail::ScalarWireFlow &flow) {
-  for (auto [input, result] : llvm::zip(flow.inputs, flow.results)) {
-    auto qubitId = qubitIds.find(input);
-    if (qubitId != qubitIds.end())
-      qubitIds.try_emplace(result, qubitId->second);
-  }
-}
 
 // Incremental maintenance is atomic: every result identity must be known before
 // the live analysis can accept an inserted operation.
@@ -53,21 +42,25 @@ static bool registerQubitIds(llvm::DenseMap<Value, QubitId> &qubitIds,
   return true;
 }
 
-// Build block-local qubit identities in program order. Block arguments and
-// null wires introduce IDs, repeated borrows reuse their (wire set, identity)
-// ID, and supported scalar-wire operators propagate IDs.
-static void buildQubitIdMap(Block &block,
-                            llvm::DenseMap<Value, QubitId> &qubitIds) {
-  QubitId nextQubitId = 0;
-  llvm::DenseMap<BorrowKey, QubitId> borrowedQubitIds;
+// Collect identity roots from one connected ordinary-scope tree. Scope-local
+// allocations receive IDs without interrupting an unrelated captured wire.
+static void
+collectIdentityRoots(Block &block, llvm::DenseMap<Value, QubitId> &qubitIds,
+                     llvm::DenseMap<BorrowKey, QubitId> &borrowedQubitIds,
+                     llvm::SmallVectorImpl<Value> &worklist,
+                     QubitId &nextQubitId) {
+  auto addRoot = [&](Value value, QubitId qubitId) {
+    if (qubitIds.try_emplace(value, qubitId).second)
+      worklist.push_back(value);
+  };
 
   for (BlockArgument argument : block.getArguments())
     if (isa<cudaq::quake::WireType>(argument.getType()))
-      qubitIds.try_emplace(argument, nextQubitId++);
+      addRoot(argument, nextQubitId++);
 
   for (Operation &operation : block) {
     if (auto nullWire = dyn_cast<cudaq::quake::NullWireOp>(operation)) {
-      qubitIds.try_emplace(nullWire.getResult(), nextQubitId++);
+      addRoot(nullWire.getResult(), nextQubitId++);
       continue;
     }
     if (auto borrowWire = dyn_cast<cudaq::quake::BorrowWireOp>(operation)) {
@@ -75,16 +68,54 @@ static void buildQubitIdMap(Block &block,
       auto [qubitId, inserted] = borrowedQubitIds.try_emplace(key, nextQubitId);
       if (inserted)
         ++nextQubitId;
-      qubitIds.try_emplace(borrowWire.getResult(), qubitId->second);
+      addRoot(borrowWire.getResult(), qubitId->second);
       continue;
     }
-    if (auto flow = cudaq::quake::detail::getScalarWireFlow(&operation))
-      propagateKnownQubitIds(qubitIds, *flow);
+    if (cudaq::opt::isSupportedScalarWireScope(&operation))
+      collectIdentityRoots(operation.getRegion(0).front(), qubitIds,
+                           borrowedQubitIds, worklist, nextQubitId);
+  }
+}
+
+static void buildQubitIdMap(Block &block,
+                            llvm::DenseMap<Value, QubitId> &qubitIds) {
+  QubitId nextQubitId = 0;
+  llvm::DenseMap<BorrowKey, QubitId> borrowedQubitIds;
+  llvm::SmallVector<Value> worklist;
+  collectIdentityRoots(block, qubitIds, borrowedQubitIds, worklist,
+                       nextQubitId);
+
+  while (!worklist.empty()) {
+    Value wire = worklist.pop_back_val();
+    auto source = qubitIds.find(wire);
+    if (source == qubitIds.end())
+      continue;
+
+    auto step = cudaq::opt::traverseScalarWire(wire);
+    if (!step)
+      continue;
+
+    if (step->continueOperand) {
+      if (qubitIds.try_emplace(step->wire, source->second).second)
+        worklist.push_back(step->wire);
+      continue;
+    }
+
+    auto flow = cudaq::quake::detail::getScalarWireFlow(step->operation);
+    if (!flow)
+      continue;
+    for (auto [input, result] : llvm::zip(flow->inputs, flow->results)) {
+      auto inputId = qubitIds.find(input);
+      if (inputId != qubitIds.end() &&
+          qubitIds.try_emplace(result, inputId->second).second)
+        worklist.push_back(result);
+    }
   }
 }
 
 QubitIdentityAnalysis::QubitIdentityAnalysis(Block &block) {
-  buildQubitIdMap(block, qubitIds);
+  Block *root = cudaq::opt::getScalarWireTraversalRoot(&block);
+  buildQubitIdMap(*root, qubitIds);
 }
 
 std::optional<QubitId>

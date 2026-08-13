@@ -233,9 +233,10 @@ def OptimizeSingleQubitCliffordT
     Consumes and produces the scalar linear SSA `!quake.wire` form created by
     `convert-to-linear-values`.
 
-    Rewrites block-local chains of exact, uncontrolled one-qubit Clifford+T
-    operations on scalar `!quake.wire` values to Matsumoto-Amano normal form.
-    The pass leaves unsupported operations and wire-flow boundaries unchanged.
+    Rewrites exact, uncontrolled one-qubit Clifford+T chains on scalar
+    `!quake.wire` values to Matsumoto-Amano normal form. Chains may cross
+    supported single-block `cc.scope` operations. The pass leaves unsupported
+    operations and wire-flow boundaries unchanged.
 
     The normal form is defined by K. Matsumoto and K. Amano, "Representation
     of Quantum Circuits with Clifford and pi/8 Gates," arXiv:0806.3834,
@@ -1392,12 +1393,13 @@ def QuakeSimplify : Pass<"quake-simplify"> {
     This pass performs several simplifications on Quake operations. The
     IR is expected to be in value-semantics form.
 
-    Commutation-aware rewrites are block local and support participating
-    operations whose controls and targets are scalar `!quake.wire` values.
-    Other valid control representations conservatively do not match. Direct
-    rewrites require exactly threaded, distinct wire operands. A rewrite that
-    crosses another operation requires the block-local analysis to prove
-    commutation.
+    Commutation-aware rewrites support participating operations whose controls
+    and targets are scalar `!quake.wire` values. Exact wire paths may cross
+    supported single-block `cc.scope` operations with one ordinary exit. Other
+    region or control-flow boundaries and valid control representations
+    conservatively do not match. Direct rewrites require exactly threaded,
+    distinct wire operands. A rewrite that crosses another operation requires
+    the scope-tree analysis to prove commutation.
 
     Among these, a constant-angle rotation that is the identity is erased. The
     angle is first folded into the period after which the rotation is exactly

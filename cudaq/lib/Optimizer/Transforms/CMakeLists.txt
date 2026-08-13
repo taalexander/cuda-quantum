@@ -77,7 +77,6 @@ add_cudaq_library(OptTransforms
   ResourceCountPreprocess.cpp
   RunSemanticsHackery.cpp
   SROA.cpp
-  ScalarWireTraversal.cpp
   StackFramePrealloc.cpp
   StatePreparation.cpp
   UnitarySynthesis.cpp

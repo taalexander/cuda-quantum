@@ -8,6 +8,7 @@
 
 #include "cudaq/Optimizer/Analysis/CommutationAnalysis.h"
 #include "QubitIdentityAnalysis.h"
+#include "cudaq/Optimizer/Analysis/ScalarWireTraversal.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -255,7 +256,7 @@ static bool haveSameAxisTargetAction(const OperationView &lhs,
 }
 
 // Normalize an exact Pauli operator or literal ExpPauli word into Pauli symbols
-// keyed by the block-local qubits on which they act.
+// keyed by the analysis-local qubits on which they act.
 static std::optional<PauliAction> getPauliAction(const OperationView &view) {
   std::optional<Pauli> pauli;
   if (isa<cudaq::quake::XOp>(view.operation))
@@ -715,7 +716,7 @@ cudaq::quake::detail::getCommutationReasonId(CommutationReason reason) {
 }
 
 CommutationAnalysis::CommutationAnalysis(Block &block)
-    : block(&block),
+    : rootBlock(cudaq::opt::getScalarWireTraversalRoot(&block)),
       qubitIdentity(std::make_unique<QubitIdentityAnalysis>(block)) {}
 
 CommutationAnalysis::~CommutationAnalysis() = default;
@@ -735,13 +736,13 @@ bool CommutationAnalysis::haveSameOrderedQuantumOperands(Operation *lhs,
 
 bool CommutationAnalysis::registerIdentityPreservingOperation(
     Operation *operation) {
-  return operation && operation->getBlock() == block &&
+  return operation && containsBlock(operation->getBlock()) &&
          qubitIdentity->registerOperation(*operation);
 }
 
 bool CommutationAnalysis::prepareIdentityPreservingReplacement(
     Operation *operation, ValueRange replacement) {
-  if (!operation || operation->getBlock() != block ||
+  if (!operation || !containsBlock(operation->getBlock()) ||
       !qubitIdentity->replacementPreservesIdentities(*operation, replacement))
     return false;
   invalidateOperation(operation);
@@ -771,7 +772,7 @@ void CommutationAnalysis::invalidateOperation(Operation *operation) {
 }
 
 void CommutationAnalysis::eraseOperation(Operation *operation) {
-  if (!operation || operation->getBlock() != block)
+  if (!operation || !containsBlock(operation->getBlock()))
     return;
   invalidateOperation(operation);
   qubitIdentity->eraseOperation(*operation);
@@ -781,7 +782,7 @@ CommutationResult CommutationAnalysis::getResult(Operation *lhs,
                                                  Operation *rhs) {
   if (!lhs || !rhs)
     return indeterminate(CommutationReason::NullOperation);
-  if (lhs->getBlock() != block || rhs->getBlock() != block)
+  if (!containsBlock(lhs->getBlock()) || !containsBlock(rhs->getBlock()))
     return indeterminate(CommutationReason::DifferentBlocks);
 
   OperationPair key = getCanonicalPair(lhs, rhs);
@@ -799,4 +800,9 @@ CommutationResult CommutationAnalysis::getResult(Operation *lhs,
 
 bool CommutationAnalysis::canCommute(Operation *lhs, Operation *rhs) {
   return static_cast<bool>(getResult(lhs, rhs));
+}
+
+bool CommutationAnalysis::containsBlock(Block *candidate) const {
+  return candidate &&
+         cudaq::opt::getScalarWireTraversalRoot(candidate) == rootBlock;
 }

@@ -7,6 +7,8 @@
  ******************************************************************************/
 
 #include "cudaq/Optimizer/Transforms/CommutationAwareRewrite.h"
+#include "cudaq/Optimizer/Dialect/CC/CCDialect.h"
+#include "cudaq/Optimizer/Dialect/CC/CCOps.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeDialect.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
 #include "llvm/ADT/SmallVector.h"
@@ -26,6 +28,7 @@ class CommutationAwareRewriteTest : public ::testing::Test {
 protected:
   void SetUp() override {
     context.loadDialect<arith::ArithDialect>();
+    context.loadDialect<cudaq::cc::CCDialect>();
     context.loadDialect<func::FuncDialect>();
     context.loadDialect<cudaq::quake::QuakeDialect>();
   }
@@ -62,16 +65,14 @@ public:
 
   LogicalResult matchAndRewrite(cudaq::quake::HOp anchor,
                                 PatternRewriter &rewriter) const override {
-    auto match = matcher.findNearest(
-        anchor, cudaq::opt::CommutationSearchDirection::Forward,
-        [&](Operation *candidate) {
-          return isa<cudaq::quake::HOp>(candidate) &&
-                 matcher.haveSameOrderedQuantumOperands(anchor, candidate);
-        });
+    auto match = matcher.findNearest(anchor, [&](Operation *candidate) {
+      return isa<cudaq::quake::HOp>(candidate) &&
+             matcher.haveSameOrderedQuantumOperands(anchor, candidate);
+    });
     if (!match)
       return failure();
 
-    rewriter.replaceOp(match->endpoint, anchor->getOperands());
+    rewriter.replaceOp(match, anchor->getOperands());
     rewriter.eraseOp(anchor);
     return success();
   }
@@ -84,28 +85,32 @@ class ReplaceOperatorParameter : public OpRewritePattern<cudaq::quake::U3Op> {
 public:
   ReplaceOperatorParameter(MLIRContext *context,
                            cudaq::opt::CommutationAwareRewriteMatcher &matcher,
-                           bool &matchedBefore, bool &matchedAfter)
+                           bool &matchedBefore, bool &matchedAfter,
+                           bool endpointOutsideScope = false)
       : OpRewritePattern(context), matcher(matcher),
-        matchedBefore(matchedBefore), matchedAfter(matchedAfter) {}
+        matchedBefore(matchedBefore), matchedAfter(matchedAfter),
+        endpointOutsideScope(endpointOutsideScope) {}
 
   LogicalResult matchAndRewrite(cudaq::quake::U3Op operation,
                                 PatternRewriter &rewriter) const override {
     Operation *anchor = operation.getTargets().front().getDefiningOp();
-    if (matchedBefore || !isa_and_nonnull<cudaq::quake::U3Op>(anchor) ||
-        !operation->getResult(0).hasOneUse())
+    if (matchedBefore || !isa_and_nonnull<cudaq::quake::U3Op>(anchor))
       return failure();
-    Operation *endpoint = *operation->getResult(0).getUsers().begin();
+    Operation *endpoint = nullptr;
+    if (endpointOutsideScope) {
+      operation->getParentOfType<func::FuncOp>().walk([&](cudaq::quake::HOp h) {
+        if (!endpoint)
+          endpoint = h;
+      });
+    } else if (operation->getResult(0).hasOneUse()) {
+      endpoint = *operation->getResult(0).getUsers().begin();
+    }
     if (!isa<cudaq::quake::HOp>(endpoint))
       return failure();
     auto reachesEndpoint = [endpoint](Operation *candidate) {
       return candidate == endpoint;
     };
-    matchedBefore =
-        matcher
-            .findNearest(anchor,
-                         cudaq::opt::CommutationSearchDirection::Forward,
-                         reachesEndpoint)
-            .has_value();
+    matchedBefore = matcher.findNearest(anchor, reachesEndpoint) != nullptr;
 
     auto replacedConstant =
         operation.getParameters().front().getDefiningOp<arith::ConstantOp>();
@@ -115,12 +120,47 @@ public:
         llvm::APFloat(2.0));
     rewriter.replaceOp(replacedConstant, replacement.getResult());
 
-    matchedAfter =
-        matcher
-            .findNearest(anchor,
-                         cudaq::opt::CommutationSearchDirection::Forward,
-                         reachesEndpoint)
-            .has_value();
+    matchedAfter = matcher.findNearest(anchor, reachesEndpoint) != nullptr;
+    return success();
+  }
+
+private:
+  cudaq::opt::CommutationAwareRewriteMatcher &matcher;
+  bool &matchedBefore;
+  bool &matchedAfter;
+  bool endpointOutsideScope;
+};
+
+class InsertUnwindAfterCachedQuery
+    : public OpRewritePattern<cudaq::quake::XOp> {
+public:
+  InsertUnwindAfterCachedQuery(
+      MLIRContext *context, cudaq::opt::CommutationAwareRewriteMatcher &matcher,
+      bool &matchedBefore, bool &matchedAfter)
+      : OpRewritePattern(context), matcher(matcher),
+        matchedBefore(matchedBefore), matchedAfter(matchedAfter) {}
+
+  LogicalResult matchAndRewrite(cudaq::quake::XOp anchor,
+                                PatternRewriter &rewriter) const override {
+    if (matchedBefore)
+      return failure();
+    auto function = anchor->getParentOfType<func::FuncOp>();
+    if (anchor->getBlock() == &function.getBody().front())
+      return failure();
+    Operation *endpoint = nullptr;
+    function.walk([&](cudaq::quake::XOp x) {
+      if (x->getBlock() != anchor->getBlock())
+        endpoint = x;
+    });
+    auto reachesEndpoint = [endpoint](Operation *candidate) {
+      return candidate == endpoint;
+    };
+    matchedBefore = matcher.findNearest(anchor, reachesEndpoint) != nullptr;
+
+    rewriter.setInsertionPoint(anchor->getBlock()->getTerminator());
+    cudaq::cc::UnwindReturnOp::create(rewriter, anchor.getLoc());
+
+    matchedAfter = matcher.findNearest(anchor, reachesEndpoint) != nullptr;
     return success();
   }
 
@@ -134,35 +174,6 @@ struct EraseListener : public RewriterBase::Listener {
   void notifyOperationErased(Operation *) override { ++eraseCount; }
   unsigned eraseCount = 0;
 };
-
-TEST_F(CommutationAwareRewriteTest,
-       ReportsBackwardCrossingsInDeterministicBlockOrder) {
-  auto module = parseModule(R"mlir(
-    module {
-      func.func @same_axis(%a: f64, %b: f64, %c: f64, %d: f64) {
-        %q = quake.null_wire
-        %rz0 = quake.rz (%a) %q : (f64, !quake.wire) -> !quake.wire
-        %rz1 = quake.rz (%b) %rz0 : (f64, !quake.wire) -> !quake.wire
-        %rz2 = quake.rz (%c) %rz1 : (f64, !quake.wire) -> !quake.wire
-        %rz3 = quake.rz (%d) %rz2 : (f64, !quake.wire) -> !quake.wire
-        quake.sink %rz3 : !quake.wire
-        return
-      }
-    })mlir");
-  ASSERT_TRUE(module);
-
-  cudaq::opt::CommutationAwareRewriteDriver driver(context);
-  auto &matcher = driver.getMatcher();
-  auto sameAxis = getOperators(getFunction(*module, "same_axis"));
-  ASSERT_EQ(sameAxis.size(), 4u);
-  auto match = matcher.findNearest(
-      sameAxis[3], cudaq::opt::CommutationSearchDirection::Backward,
-      [&](Operation *candidate) { return candidate == sameAxis[0]; });
-  ASSERT_TRUE(match);
-  EXPECT_EQ(match->endpoint, sameAxis[0]);
-  EXPECT_EQ(match->crossed,
-            (llvm::SmallVector<Operation *>{sameAxis[1], sameAxis[2]}));
-}
 
 TEST_F(CommutationAwareRewriteTest,
        StopsBeforeEndpointWhenARequiredWirePathEnds) {
@@ -185,15 +196,47 @@ TEST_F(CommutationAwareRewriteTest,
   auto operators = getOperators(getFunction(*module, "ended_path"));
   ASSERT_EQ(operators.size(), 2u);
   unsigned predicateCalls = 0;
-  auto match = driver.getMatcher().findNearest(
-      operators[0], cudaq::opt::CommutationSearchDirection::Forward,
-      [&](Operation *candidate) {
+  auto match =
+      driver.getMatcher().findNearest(operators[0], [&](Operation *candidate) {
         ++predicateCalls;
         return candidate == operators[1];
       });
 
   EXPECT_FALSE(match);
   EXPECT_EQ(predicateCalls, 0u);
+}
+
+TEST_F(CommutationAwareRewriteTest, OrdersMultiWireFrontierAcrossNestedScope) {
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @nested_frontier() {
+        %control = quake.null_wire
+        %target = quake.null_wire
+        %anchor:2 = quake.z [%control] %target
+            : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        %scope = cc.scope -> !quake.wire {
+          %inner = quake.z %anchor#0 : (!quake.wire) -> !quake.wire
+          cc.continue %inner : !quake.wire
+        }
+        %outer = quake.z %anchor#1 : (!quake.wire) -> !quake.wire
+        %endpoint:2 = quake.z [%scope] %outer
+            : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+        quake.sink %endpoint#0 : !quake.wire
+        quake.sink %endpoint#1 : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+
+  cudaq::opt::CommutationAwareRewriteDriver driver(context);
+  auto operators = getOperators(getFunction(*module, "nested_frontier"));
+  ASSERT_EQ(operators.size(), 3u);
+  Operation *endpoint = operators[2];
+  EXPECT_EQ(driver.getMatcher().findNearest(operators[0],
+                                            [endpoint](Operation *candidate) {
+                                              return candidate == endpoint;
+                                            }),
+            endpoint);
 }
 
 TEST_F(CommutationAwareRewriteTest,
@@ -268,9 +311,10 @@ TEST_F(CommutationAwareRewriteTest, RejectsDirectRepeatedWireOperand) {
   cudaq::opt::CommutationAwareRewriteDriver driver(context);
   auto operators = getOperators(getFunction(*module, "repeated_wire"));
   ASSERT_EQ(operators.size(), 2u);
-  EXPECT_FALSE(driver.getMatcher().findNearest(
-      operators[0], cudaq::opt::CommutationSearchDirection::Forward,
-      [&](Operation *candidate) { return candidate == operators[1]; }));
+  EXPECT_FALSE(
+      driver.getMatcher().findNearest(operators[0], [&](Operation *candidate) {
+        return candidate == operators[1];
+      }));
   EXPECT_FALSE(driver.getMatcher().haveSameOrderedQuantumOperands(
       operators[0], operators[1]));
   EXPECT_EQ(driver.getStatistics().analysisBuilds, 1u);
@@ -299,9 +343,10 @@ TEST_F(CommutationAwareRewriteTest, RejectsDirectAliasedWireOperands) {
   cudaq::opt::CommutationAwareRewriteDriver driver(context);
   auto operators = getOperators(getFunction(*module, "aliased_wires"));
   ASSERT_EQ(operators.size(), 2u);
-  EXPECT_FALSE(driver.getMatcher().findNearest(
-      operators[0], cudaq::opt::CommutationSearchDirection::Forward,
-      [&](Operation *candidate) { return candidate == operators[1]; }));
+  EXPECT_FALSE(
+      driver.getMatcher().findNearest(operators[0], [&](Operation *candidate) {
+        return candidate == operators[1];
+      }));
   EXPECT_FALSE(driver.getMatcher().haveSameOrderedQuantumOperands(
       operators[0], operators[1]));
   EXPECT_EQ(driver.getStatistics().analysisBuilds, 1u);
@@ -367,6 +412,77 @@ TEST_F(CommutationAwareRewriteTest,
   EXPECT_EQ(parameterStatistics.analysisBuilds, 2u);
   EXPECT_EQ(parameterStatistics.fallbackRebuilds, 1u);
   EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(CommutationAwareRewriteTest,
+       InvalidatesTheConnectedScopeTreeAfterNestedMutation) {
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @nested_parameter_replacement() {
+        %theta0 = arith.constant 1.0 : f64
+        %zero = arith.constant 0.0 : f64
+        %q = quake.null_wire
+        %u0 = quake.u3 (%theta0, %zero, %zero) %q : (f64, f64, f64, !quake.wire) -> !quake.wire
+        %scope = cc.scope -> !quake.wire {
+          %theta1 = arith.constant 1.0 : f64
+          %u1 = quake.u3 (%theta1, %zero, %zero) %u0 : (f64, f64, f64, !quake.wire) -> !quake.wire
+          cc.continue %u1 : !quake.wire
+        }
+        %h = quake.h %scope : (!quake.wire) -> !quake.wire
+        quake.sink %h : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+
+  GreedyRewriteConfig config;
+  config.enableFolding(false).enableConstantCSE(false);
+  cudaq::opt::CommutationAwareRewriteDriver driver(context, config);
+  bool matchedBefore = false;
+  bool matchedAfter = true;
+  driver.getPatterns().add<ReplaceOperatorParameter>(
+      &context, driver.getMatcher(), matchedBefore, matchedAfter, true);
+
+  auto function = getFunction(*module, "nested_parameter_replacement");
+  EXPECT_TRUE(succeeded(driver.run(function.getBody())));
+  EXPECT_TRUE(matchedBefore);
+  EXPECT_FALSE(matchedAfter);
+  auto statistics = driver.getStatistics();
+  EXPECT_EQ(statistics.analysisBuilds, 2u);
+  EXPECT_EQ(statistics.fallbackRebuilds, 1u);
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(CommutationAwareRewriteTest,
+       InvalidatesWhenUnwindMakesScopeTraversalUnsupported) {
+  auto module = parseModule(R"mlir(
+    module {
+      func.func @insert_unwind() {
+        %theta = arith.constant 1.0 : f64
+        %q = quake.null_wire
+        %scope = cc.scope -> !quake.wire {
+          %x0 = quake.x %q : (!quake.wire) -> !quake.wire
+          %rx = quake.rx (%theta) %x0 : (f64, !quake.wire) -> !quake.wire
+          cc.continue %rx : !quake.wire
+        }
+        %x1 = quake.x %scope : (!quake.wire) -> !quake.wire
+        quake.sink %x1 : !quake.wire
+        return
+      }
+    })mlir");
+  ASSERT_TRUE(module);
+
+  cudaq::opt::CommutationAwareRewriteDriver driver(context);
+  bool matchedBefore = false;
+  bool matchedAfter = true;
+  driver.getPatterns().add<InsertUnwindAfterCachedQuery>(
+      &context, driver.getMatcher(), matchedBefore, matchedAfter);
+
+  auto function = getFunction(*module, "insert_unwind");
+  EXPECT_TRUE(succeeded(driver.run(function.getBody())));
+  EXPECT_TRUE(matchedBefore);
+  EXPECT_FALSE(matchedAfter);
+  EXPECT_EQ(driver.getStatistics().analysisBuilds, 2u);
 }
 
 } // namespace

@@ -37,7 +37,7 @@ enum class CommutationStatus { Commutes, DoesNotCommute, Indeterminate };
 /// The rule or limitation that produced a commutation status.
 enum class CommutationReason {
   // Reasons paired with CommutationStatus::Commutes.
-  /// The operations have disjoint block-local quantum support.
+  /// The operations have disjoint analysis-local quantum support.
   DisjointSupport,
   /// The recognized operations have the same structural action and placement,
   /// optionally with opposite adjoint states.
@@ -71,7 +71,7 @@ enum class CommutationReason {
   // Reasons paired with CommutationStatus::Indeterminate.
   /// At least one query operation is null.
   NullOperation,
-  /// At least one operation is outside the analyzed block.
+  /// At least one operation is outside the analyzed scope traversal tree.
   DifferentBlocks,
   /// At least one operation has no supported analysis operation view.
   UnsupportedOperationKind,
@@ -102,8 +102,8 @@ struct CommutationResult {
   }
 };
 
-/// Exact block-local commutation analysis for supported Quake quantum
-/// operations.
+/// Exact commutation analysis for supported Quake quantum operations in one
+/// connected ordinary-scope traversal tree.
 ///
 /// A query asks whether two operations have the same induced action when
 /// composed in either order. Gates are treated as unitary channels. For
@@ -143,7 +143,7 @@ struct CommutationResult {
 /// `!quake.control`, `quake.to_ctrl`, `quake.from_ctrl`, calls, references,
 /// aggregates, or unsupported non-unitary quantum operations. Each wire block
 /// argument establishes a local identity that is not correlated with values on
-/// predecessor edges.
+/// unsupported predecessor edges.
 ///
 /// A cached pair remains valid only while both operations retain their
 /// commutation-relevant semantics and ordered qubit identity and role
@@ -172,6 +172,10 @@ public:
 private:
   using OperationPair = std::pair<mlir::Operation *, mlir::Operation *>;
 
+  /// Return true when the block belongs to this analysis's supported scope
+  /// traversal tree.
+  bool containsBlock(mlir::Block *candidate) const;
+
   /// Return true when both operations implement Quake OperatorInterface and
   /// their ordered controls and targets have the same known analysis-local
   /// identities.
@@ -190,7 +194,7 @@ private:
   /// Invalidate incident pairs, then remove an operation's result identities.
   void eraseOperation(mlir::Operation *operation);
 
-  mlir::Block *block;
+  mlir::Block *rootBlock;
   std::unique_ptr<QubitIdentityAnalysis> qubitIdentity;
   llvm::DenseMap<OperationPair, CommutationResult> cache;
   llvm::DenseMap<mlir::Operation *, llvm::DenseSet<OperationPair>>

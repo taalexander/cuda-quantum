@@ -10,7 +10,7 @@
 // RUN: sed -n '/SEMANTIC-BEGIN$/,/SEMANTIC-END$/p' %s > %t.semantic.qke
 // RUN: cudaq-opt --optimize-1q-clifford-t %t.semantic.qke | CircuitCheck %t.semantic.qke --up-to-global-phase
 // RUN: sed -n '/EXACT-SCOPE-BEGIN$/,/EXACT-SCOPE-END$/p' %s > %t.scope.qke
-// RUN: cudaq-opt --optimize-1q-clifford-t %t.scope.qke | CircuitCheck %t.scope.qke
+// RUN: cudaq-opt --optimize-1q-clifford-t %t.scope.qke | CircuitCheck --no-canonicalizer %t.scope.qke
 
 func.func @independent_wires(%arg0: !quake.wire, %arg1: !quake.wire)
     -> (!quake.wire, !quake.wire) {
@@ -67,7 +67,7 @@ func.func @ordinary_scope(%arg0: !quake.wire) -> !quake.wire {
 // CHECK-LABEL: func.func @ordinary_scope
 // CHECK:         %[[S0:.*]] = quake.s %arg0
 // CHECK:         %[[S1:.*]] = quake.s %[[S0]]
-// CHECK:         %[[SCOPE:.*]] = cc.scope -> !quake.wire {
+// CHECK:         %[[SCOPE:.*]] = cc.scope -> (!quake.wire) {
 // CHECK-NEXT:      cc.continue %[[S1]]
 // CHECK-NEXT:    }
 // CHECK-NEXT:    return %[[SCOPE]]
@@ -88,8 +88,8 @@ func.func @nested_ordinary_scope(%arg0: !quake.wire) -> !quake.wire {
 // CHECK-LABEL: func.func @nested_ordinary_scope
 // CHECK:         %[[S0:.*]] = quake.s %arg0
 // CHECK:         %[[S1:.*]] = quake.s %[[S0]]
-// CHECK:         %[[OUTER:.*]] = cc.scope -> !quake.wire {
-// CHECK-NEXT:      %[[INNER:.*]] = cc.scope -> !quake.wire {
+// CHECK:         %[[OUTER:.*]] = cc.scope -> (!quake.wire) {
+// CHECK-NEXT:      %[[INNER:.*]] = cc.scope -> (!quake.wire) {
 // CHECK-NEXT:        cc.continue %[[S1]]
 // CHECK-NEXT:      }
 // CHECK-NEXT:      cc.continue %[[INNER]]
@@ -113,7 +113,7 @@ func.func @scope_with_unrelated_allocation(%arg0: !quake.wire) -> !quake.wire {
 // CHECK-LABEL: func.func @scope_with_unrelated_allocation
 // CHECK:         %[[S0:.*]] = quake.s %arg0
 // CHECK:         %[[S1:.*]] = quake.s %[[S0]]
-// CHECK:         %[[SCOPE:.*]] = cc.scope -> !quake.wire {
+// CHECK:         %[[SCOPE:.*]] = cc.scope -> (!quake.wire) {
 // CHECK:           %[[LOCAL:.*]] = quake.alloca !quake.ref
 // CHECK-NEXT:      quake.dealloc %[[LOCAL]] : !quake.ref
 // CHECK-NEXT:      cc.continue %[[S1]]
@@ -136,9 +136,9 @@ func.func @if_boundary(%arg0: !quake.wire, %cond: i1) -> !quake.wire {
 
 // CHECK-LABEL: func.func @if_boundary
 // CHECK:         %[[T0:.*]] = quake.t %arg0
-// CHECK:         %[[IF:.*]]:1 = cc.if
+// CHECK:         %[[IF:.*]] = cc.if
 // CHECK:           %[[S:.*]] = quake.s %{{.*}}
-// CHECK:         %[[T1:.*]] = quake.t %[[IF]]#0
+// CHECK:         %[[T1:.*]] = quake.t %[[IF]]
 
 // EXACT-SCOPE-BEGIN
 

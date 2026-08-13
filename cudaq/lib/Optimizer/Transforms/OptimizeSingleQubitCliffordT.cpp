@@ -7,10 +7,10 @@
  ******************************************************************************/
 
 #include "PassDetails.h"
+#include "cudaq/Optimizer/Analysis/ScalarWireTraversal.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeTypes.h"
 #include "cudaq/Optimizer/Transforms/Passes.h"
-#include "cudaq/Optimizer/Transforms/ScalarWireTraversal.h"
 #include "cudaq/Synthesis/Circuit/Circuit.h"
 #include "cudaq/Synthesis/Circuit/Gate.h"
 #include "llvm/ADT/STLExtras.h"
@@ -108,12 +108,10 @@ static std::optional<UnaryWireOp> getNextUnaryWireOp(
     const UnaryWireOp &current,
     llvm::SmallVectorImpl<cudaq::opt::ScalarWireStep> &scopeSteps) {
   std::optional<cudaq::opt::ScalarWireStep> step =
-      cudaq::opt::traverseScalarWire(
-          current.output, cudaq::opt::ScalarWireTraversalDirection::Forward);
+      cudaq::opt::traverseScalarWire(current.output);
   while (step && step->continueOperand) {
     scopeSteps.push_back(*step);
-    step = cudaq::opt::traverseScalarWire(
-        step->wire, cudaq::opt::ScalarWireTraversalDirection::Forward);
+    step = cudaq::opt::traverseScalarWire(step->wire);
   }
   return step ? getUnaryWireOp(step->operation) : std::nullopt;
 }

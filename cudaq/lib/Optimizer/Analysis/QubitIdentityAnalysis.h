@@ -22,7 +22,8 @@ class Operation;
 namespace cudaq::quake::detail {
 
 /// Assigns analysis-local identifiers to virtual qubits represented by scalar
-/// `!quake.wire` values within one block of valid Quake value-form IR.
+/// `!quake.wire` values within one ordinary-scope traversal tree of valid
+/// Quake value-form IR.
 /// `CommutationAnalysis` uses these identifiers to determine whether operations
 /// act on the same or disjoint virtual qubits.
 ///
@@ -33,11 +34,11 @@ namespace cudaq::quake::detail {
 ///
 /// The analysis does not propagate identifiers through reusable controls,
 /// conversions, calls, references, aggregates, unsupported non-unitary quantum
-/// operations, or block edges. Values that cannot be identified unambiguously
-/// remain unidentified. The commutation-aware rewrite driver selectively
-/// maintains identities for verified identity-preserving insertions,
-/// replacements, and erasures. Unsupported mutations invalidate the owning
-/// analysis.
+/// operations, or unsupported region edges. Values that cannot be identified
+/// unambiguously remain unidentified. The commutation-aware rewrite driver
+/// selectively maintains identities for verified identity-preserving
+/// insertions, replacements, and erasures. Unsupported mutations invalidate the
+/// owning analysis.
 class QubitIdentityAnalysis {
 public:
   using QubitId = std::uint32_t;

@@ -6,13 +6,109 @@
 // the terms of the Apache License 2.0 which accompanies this distribution.    //
 // ========================================================================== //
 
-// RUN: cudaq-opt --quake-simplify %s | FileCheck %s
+// RUN: cudaq-opt --verify-each --quake-simplify %s | FileCheck %s
 
 // Every function here holds a pair that looks cancellable but must survive, for
 // one of two reasons: something between the two endpoints cannot be proven safe
 // to cross, or the two endpoints are not inverses of each other after all.
 
 func.func private @opaque_wire(!quake.wire) -> !quake.wire
+func.func private @opaque_angle() -> f64
+
+// A scope-local dynamic angle does not dominate an endpoint outside the scope,
+// so combining these rotations would create invalid SSA.
+func.func @scope_local_angle_barrier() -> !quake.wire {
+  %q = quake.null_wire
+  %scope = cc.scope -> !quake.wire {
+    %angle = func.call @opaque_angle() : () -> f64
+    %inner = quake.rz (%angle) %q : (f64, !quake.wire) -> !quake.wire
+    cc.continue %inner : !quake.wire
+  }
+  %outer_angle = arith.constant 0.25 : f64
+  %outer = quake.rz (%outer_angle) %scope : (f64, !quake.wire) -> !quake.wire
+  return %outer : !quake.wire
+}
+
+// CHECK-LABEL: func.func @scope_local_angle_barrier
+// CHECK:         %[[SCOPE:.*]] = cc.scope -> (!quake.wire)
+// CHECK:           %[[ANGLE:.*]] = func.call @opaque_angle()
+// CHECK:           %[[INNER:.*]] = quake.rz (%[[ANGLE]])
+// CHECK:         %[[OUTER:.*]] = quake.rz {{.*}} %[[SCOPE]]
+// CHECK:         return %[[OUTER]]
+
+// Scope traversal remains conservative when the region is not one ordinary
+// single-block exit or when any positional quantum result is not a scalar wire.
+func.func @scope_interface_barriers(%condition: i1) -> !quake.wire {
+  %q0 = quake.null_wire
+  %q1 = quake.null_wire
+  %q2 = quake.null_wire
+  %h0 = quake.h %q0 : (!quake.wire) -> !quake.wire
+  %multi = cc.scope -> !quake.wire {
+    cf.br ^exit
+  ^exit:
+    cc.continue %h0 : !quake.wire
+  }
+  %h1 = quake.h %multi : (!quake.wire) -> !quake.wire
+
+  %control = quake.to_ctrl %q1 : (!quake.wire) -> !quake.control
+  %h2 = quake.h %q2 : (!quake.wire) -> !quake.wire
+  %mixed:2 = cc.scope -> (!quake.wire, !quake.control) {
+    cc.continue %h2, %control : !quake.wire, !quake.control
+  }
+  %h3 = quake.h %mixed#0 : (!quake.wire) -> !quake.wire
+  %returned = quake.from_ctrl %mixed#1 : (!quake.control) -> !quake.wire
+  quake.sink %h1 : !quake.wire
+  quake.sink %returned : !quake.wire
+  return %h3 : !quake.wire
+}
+
+// CHECK-LABEL: func.func @scope_interface_barriers
+// CHECK:         quake.h
+// CHECK:         cc.scope -> (!quake.wire)
+// CHECK:         quake.h
+// CHECK:         quake.h
+// CHECK:         cc.scope -> (!quake.wire, !quake.control)
+// CHECK:         quake.h
+
+// A loop owns repeated control flow, so positional wire results do not make it
+// an ordinary-scope path.
+func.func @loop_barrier(%condition: i1) -> !quake.wire {
+  %q = quake.null_wire
+  %h0 = quake.h %q : (!quake.wire) -> !quake.wire
+  %loop = cc.loop while ((%wire = %h0) -> !quake.wire) {
+    cc.condition %condition (%wire : !quake.wire)
+  } do {
+  ^entry(%body_wire: !quake.wire):
+    cc.continue %body_wire : !quake.wire
+  }
+  %h1 = quake.h %loop : (!quake.wire) -> !quake.wire
+  return %h1 : !quake.wire
+}
+
+// CHECK-LABEL: func.func @loop_barrier
+// CHECK:         quake.h
+// CHECK:         cc.loop
+// CHECK:         quake.h
+
+// An unwind exit can bypass the ordinary continuation, so the enclosing scope
+// cannot establish one exact wire path.
+func.func @unwind_scope_barrier(%condition: i1) -> !quake.wire {
+  %q = quake.null_wire
+  %h0 = quake.h %q : (!quake.wire) -> !quake.wire
+  %scope = cc.scope -> !quake.wire {
+    cc.if (%condition) {
+      cc.unwind_return %h0 : !quake.wire
+    }
+    cc.continue %h0 : !quake.wire
+  }
+  %h1 = quake.h %scope : (!quake.wire) -> !quake.wire
+  return %h1 : !quake.wire
+}
+
+// CHECK-LABEL: func.func @unwind_scope_barrier
+// CHECK:         quake.h
+// CHECK:         cc.unwind_return
+// CHECK:         quake.h
 
 // Measurement instruments and reset channels propagate scalar wire identity,
 // but the analysis still requires a supported commutation proof before the
@@ -44,24 +140,24 @@ func.func @non_unitary_relation_barriers() {
 
 // A computational-basis measurement instrument commutes with Z. The matcher
 // may cross it without disturbing the classical result or the returned wire.
-func.func @measurement_instrument_commuting_path() {
+func.func @measurement_instrument_commuting_path() -> !quake.measure {
   %q = quake.null_wire
   %z0 = quake.z %q : (!quake.wire) -> !quake.wire
   %bit, %measured = quake.mz %z0 : (!quake.wire) -> (!quake.measure, !quake.wire)
   %z1 = quake.z %measured : (!quake.wire) -> !quake.wire
   quake.sink %z1 : !quake.wire
-  return
+  return %bit : !quake.measure
 }
 
 // Both Z gates disappear. The measurement instrument still consumes the
 // original wire and threads its quantum result to the sink.
-// CHECK-LABEL: func.func @measurement_instrument_commuting_path() {
+// CHECK-LABEL: func.func @measurement_instrument_commuting_path() -> !quake.measure {
 // CHECK:         %[[Q:.*]] = quake.null_wire
 // CHECK-NOT:     quake.z
 // CHECK:         %[[BIT:.*]], %[[MEASURED:.*]] = quake.mz %[[Q]]
 // CHECK-NOT:     quake.z
 // CHECK:         quake.sink %[[MEASURED]]
-// CHECK:         return
+// CHECK:         return %[[BIT]] : !quake.measure
 
 // A call may do anything to a wire it takes, so the search ends there instead
 // of treating the two H gates as a pair on an untouched qubit.

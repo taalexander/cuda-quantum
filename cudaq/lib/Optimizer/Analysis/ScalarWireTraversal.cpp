@@ -6,9 +6,10 @@
  * the terms of the Apache License 2.0 which accompanies this distribution.    *
  ******************************************************************************/
 
-#include "cudaq/Optimizer/Transforms/ScalarWireTraversal.h"
+#include "cudaq/Optimizer/Analysis/ScalarWireTraversal.h"
 #include "cudaq/Optimizer/Dialect/CC/CCOps.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
+#include "llvm/ADT/STLExtras.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 
 using namespace mlir;
@@ -20,7 +21,7 @@ static bool entersSingleBlockLexicalScopesOnly(Block *nested, Block *outer) {
     if (!nested)
       return false;
     auto scope = dyn_cast_or_null<cudaq::cc::ScopeOp>(nested->getParentOp());
-    if (!scope || !scope.getInitRegion().hasOneBlock())
+    if (!scope || !cudaq::opt::isSupportedScalarWireScope(scope))
       return false;
     nested = scope->getBlock();
   }
@@ -28,8 +29,7 @@ static bool entersSingleBlockLexicalScopesOnly(Block *nested, Block *outer) {
 }
 
 /// Returns the `cc.continue` that forwards values from a single-block lexical
-/// scope. Direction-specific helpers validate its positional mapping to the
-/// scope results.
+/// scope. Its positional mapping to the scope results is validated here.
 static std::optional<cudaq::cc::ContinueOp>
 getSingleBlockScopeContinue(cudaq::cc::ScopeOp scope) {
   if (!scope || !scope.getInitRegion().hasOneBlock())
@@ -38,7 +38,44 @@ getSingleBlockScopeContinue(cudaq::cc::ScopeOp scope) {
       scope.getInitRegion().front().getTerminator());
   if (!cont || cont.getNumOperands() != scope->getNumResults())
     return std::nullopt;
+  for (auto [operand, result] :
+       llvm::zip(cont.getOperands(), scope->getResults())) {
+    bool operandIsWire = isa<cudaq::quake::WireType>(operand.getType());
+    bool resultIsWire = isa<cudaq::quake::WireType>(result.getType());
+    if (operandIsWire != resultIsWire)
+      return std::nullopt;
+    if ((cudaq::quake::isQuantumType(operand.getType()) && !operandIsWire) ||
+        (cudaq::quake::isQuantumType(result.getType()) && !resultIsWire))
+      return std::nullopt;
+  }
   return cont;
+}
+
+bool cudaq::opt::isSupportedScalarWireScope(Operation *operation) {
+  auto scope = dyn_cast_or_null<cudaq::cc::ScopeOp>(operation);
+  if (!scope || !getSingleBlockScopeContinue(scope))
+    return false;
+
+  bool foundUnwind = false;
+  scope.getInitRegion().walk([&](Operation *nested) {
+    if (isa<cudaq::cc::UnwindBreakOp, cudaq::cc::UnwindContinueOp,
+            cudaq::cc::UnwindReturnOp>(nested)) {
+      foundUnwind = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return !foundUnwind;
+}
+
+Block *cudaq::opt::getScalarWireTraversalRoot(Block *block) {
+  while (block) {
+    auto scope = dyn_cast_or_null<cudaq::cc::ScopeOp>(block->getParentOp());
+    if (!scope || !isSupportedScalarWireScope(scope))
+      return block;
+    block = scope->getBlock();
+  }
+  return nullptr;
 }
 
 /// Return whether an operation can be followed as a direct scalar-wire step.
@@ -56,7 +93,7 @@ traverseScopeForward(OpOperand *use) {
   if (!cont)
     return std::nullopt;
   auto scope = dyn_cast<cudaq::cc::ScopeOp>(cont->getParentOp());
-  if (!scope || !getSingleBlockScopeContinue(scope))
+  if (!scope || !cudaq::opt::isSupportedScalarWireScope(scope))
     return std::nullopt;
   // `cc.continue` forwards each operand to the scope result at the same
   // position, so the operand number identifies the outgoing scalar wire.
@@ -71,56 +108,23 @@ traverseScopeForward(OpOperand *use) {
   return cudaq::opt::ScalarWireStep{result, scope, use};
 }
 
-/// Follows a scope result to the corresponding `cc.continue` operand.
-static std::optional<cudaq::opt::ScalarWireStep>
-traverseScopeBackward(OpResult result, cudaq::cc::ScopeOp scope) {
-  auto cont = getSingleBlockScopeContinue(scope);
-  if (!cont || result.getResultNumber() >= cont->getNumOperands())
-    return std::nullopt;
-  Operation *continueOperation = cont->getOperation();
-  // Scope results and `cc.continue` operands share a positional mapping.
-  OpOperand *operand =
-      &continueOperation->getOpOperand(result.getResultNumber());
-  // The operand must also be a single-use scalar wire before following it
-  // into the lexical scope.
-  if (!isa<cudaq::quake::WireType>(operand->get().getType()) ||
-      !operand->get().hasOneUse())
-    return std::nullopt;
-  return cudaq::opt::ScalarWireStep{operand->get(), *cont, operand};
-}
-
 std::optional<cudaq::opt::ScalarWireStep>
-cudaq::opt::traverseScalarWire(Value wire,
-                               ScalarWireTraversalDirection direction) {
+cudaq::opt::traverseScalarWire(Value wire) {
   if (!isa<cudaq::quake::WireType>(wire.getType()) || !wire.hasOneUse())
     return std::nullopt;
 
-  if (direction == ScalarWireTraversalDirection::Forward) {
-    OpOperand *use = &*wire.getUses().begin();
-    Operation *user = use->getOwner();
-    // A `cc.continue` forwards a value defined inside a lexical scope to its
-    // corresponding scope result.
-    if (isa<cudaq::cc::ContinueOp>(user))
-      return traverseScopeForward(use);
-    if (!isDirectScalarWireStep(user))
-      return std::nullopt;
-    // Values defined outside a lexical scope are captured implicitly. Accept
-    // the use only when every intervening region is a supported scope.
-    if (!entersSingleBlockLexicalScopesOnly(user->getBlock(),
-                                            wire.getParentBlock()))
-      return std::nullopt;
-    return ScalarWireStep{wire, user};
-  }
-
-  auto result = dyn_cast<OpResult>(wire);
-  if (!result)
+  OpOperand *use = &*wire.getUses().begin();
+  Operation *user = use->getOwner();
+  // A `cc.continue` forwards a value defined inside a lexical scope to its
+  // corresponding scope result.
+  if (isa<cudaq::cc::ContinueOp>(user))
+    return traverseScopeForward(use);
+  if (!isDirectScalarWireStep(user))
     return std::nullopt;
-  // A scope result is reached by following its corresponding `cc.continue`
-  // operand back into the lexical scope.
-  if (auto scope = dyn_cast<cudaq::cc::ScopeOp>(result.getOwner())) {
-    return traverseScopeBackward(result, scope);
-  }
-  if (!isDirectScalarWireStep(result.getOwner()))
+  // Values defined outside a lexical scope are captured implicitly. Accept
+  // the use only when every intervening region is a supported scope.
+  if (!entersSingleBlockLexicalScopesOnly(user->getBlock(),
+                                          wire.getParentBlock()))
     return std::nullopt;
-  return ScalarWireStep{wire, result.getOwner()};
+  return ScalarWireStep{wire, user};
 }

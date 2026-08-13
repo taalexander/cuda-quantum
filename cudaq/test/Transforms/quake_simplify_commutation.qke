@@ -6,12 +6,76 @@
 // the terms of the Apache License 2.0 which accompanies this distribution.    //
 // ========================================================================== //
 
-// RUN: cudaq-opt --quake-simplify %s | FileCheck %s
+// RUN: cudaq-opt --verify-each --quake-simplify %s | FileCheck %s
 // RUN: cudaq-opt --symbol-dce %s > %t.baseline
-// RUN: cudaq-opt --quake-simplify --symbol-dce %s | CircuitCheck %t.baseline
+// RUN: cudaq-opt --quake-simplify --symbol-dce %s | CircuitCheck --no-canonicalizer %t.baseline
 // RUN: cudaq-opt --quake-simplify %s > %t.first
 // RUN: cudaq-opt --quake-simplify %s > %t.second
 // RUN: diff %t.first %t.second
+
+// Exact cancellation and rotation folding may follow one scalar wire through
+// ordinary scopes. The nested case crosses an Rx, and the allocation in the
+// third scope belongs to an unrelated qubit.
+func.func @rewrite_through_ordinary_scopes() {
+  %angle0 = arith.constant 0.125 : f64
+  %angle1 = arith.constant 0.25 : f64
+  %q0 = quake.null_wire
+  %q1 = quake.null_wire
+  %q2 = quake.null_wire
+
+  %h0 = quake.h %q0 : (!quake.wire) -> !quake.wire
+  %scope0 = cc.scope -> !quake.wire {
+    cc.continue %h0 : !quake.wire
+  }
+  %h1 = quake.h %scope0 : (!quake.wire) -> !quake.wire
+
+  %x0 = quake.x %q1 : (!quake.wire) -> !quake.wire
+  %scope1 = cc.scope -> !quake.wire {
+    %nested = cc.scope -> !quake.wire {
+      %rx = quake.rx (%angle0) %x0 : (f64, !quake.wire) -> !quake.wire
+      cc.continue %rx : !quake.wire
+    }
+    cc.continue %nested : !quake.wire
+  }
+  %x1 = quake.x %scope1 : (!quake.wire) -> !quake.wire
+
+  %z0 = quake.rz (%angle0) %q2 : (f64, !quake.wire) -> !quake.wire
+  %scope2 = cc.scope -> !quake.wire {
+    %local = quake.alloca !quake.ref
+    %s = quake.s %z0 : (!quake.wire) -> !quake.wire
+    quake.dealloc %local : !quake.ref
+    cc.continue %s : !quake.wire
+  }
+  %z1 = quake.rz (%angle1) %scope2 : (f64, !quake.wire) -> !quake.wire
+
+  quake.sink %h1 : !quake.wire
+  quake.sink %x1 : !quake.wire
+  quake.sink %z1 : !quake.wire
+  return
+}
+
+// CHECK-LABEL: func.func @rewrite_through_ordinary_scopes
+// CHECK:         %[[FOLDED:.*]] = arith.constant 3.750000e-01 : f64
+// CHECK-NOT:     quake.h
+// CHECK:         %[[SCOPE0:.*]] = cc.scope -> (!quake.wire) {
+// CHECK-NEXT:      cc.continue %{{.*}} : !quake.wire
+// CHECK:         %[[SCOPE1:.*]] = cc.scope -> (!quake.wire) {
+// CHECK-NEXT:      %[[NESTED:.*]] = cc.scope -> (!quake.wire) {
+// CHECK-NEXT:        %[[RX:.*]] = quake.rx
+// CHECK-NEXT:        cc.continue %[[RX]] : !quake.wire
+// CHECK-NEXT:      }
+// CHECK-NEXT:      cc.continue %[[NESTED]] : !quake.wire
+// CHECK-NOT:     quake.x
+// CHECK-NOT:     quake.rz
+// CHECK:         %[[SCOPE2:.*]] = cc.scope -> (!quake.wire) {
+// CHECK:           %[[LOCAL:.*]] = quake.alloca !quake.ref
+// CHECK:           %[[S:.*]] = quake.s
+// CHECK:           quake.dealloc %[[LOCAL]] : !quake.ref
+// CHECK:           cc.continue %[[S]] : !quake.wire
+// CHECK:         %[[RZ:.*]] = quake.rz (%[[FOLDED]]) %[[SCOPE2]]
+// CHECK:         quake.sink %[[SCOPE0]] : !quake.wire
+// CHECK:         quake.sink %[[SCOPE1]] : !quake.wire
+// CHECK:         quake.sink %[[RZ]] : !quake.wire
 
 // Every exact-inverse family in one fixture: the Hermitian gates X, Y and Z,
 // and the opposite-adjoint pairs S/S<adj> and T<adj>/T. Each pair straddles a

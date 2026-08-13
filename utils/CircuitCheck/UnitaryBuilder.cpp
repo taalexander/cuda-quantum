@@ -7,6 +7,8 @@
  ******************************************************************************/
 
 #include "UnitaryBuilder.h"
+#include "cudaq/Optimizer/Analysis/ScalarWireTraversal.h"
+#include "cudaq/Optimizer/Dialect/CC/CCOps.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeInterfaces.h"
 #include <algorithm>
 #include <numeric>
@@ -15,6 +17,20 @@ using namespace cudaq;
 using namespace mlir;
 
 LogicalResult UnitaryBuilder::build(func::FuncOp func) {
+  WalkResult scopeValidation = func.walk([&](cudaq::cc::ScopeOp scope) {
+    if (!cudaq::opt::isSupportedScalarWireScope(scope))
+      return scope.emitOpError("unsupported control flow in unitary check"),
+             WalkResult::interrupt();
+    for (Operation &operation : scope.getInitRegion().front())
+      if (operation.getNumRegions() != 0 && !isa<cudaq::cc::ScopeOp>(operation))
+        return operation.emitOpError(
+                   "unsupported nested control flow in unitary check"),
+               WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  if (scopeValidation.wasInterrupted())
+    return failure();
+
   for (auto arg : func.getArguments()) {
     auto type = arg.getType();
     if (isa<cudaq::quake::RefType, cudaq::quake::VeqType>(type))
@@ -38,6 +54,20 @@ LogicalResult UnitaryBuilder::build(func::FuncOp func) {
       return visitExtractOp(extractOp);
     if (auto unwrapOp = dyn_cast<cudaq::quake::UnwrapOp>(op))
       return visitUnwrapOp(unwrapOp);
+    if (auto continueOp = dyn_cast<cudaq::cc::ContinueOp>(op)) {
+      if (auto scope = dyn_cast<cudaq::cc::ScopeOp>(op->getParentOp())) {
+        if (!cudaq::opt::isSupportedScalarWireScope(scope))
+          return WalkResult::interrupt();
+        for (auto [result, operand] :
+             llvm::zip(scope.getResults(), continueOp.getOperands()))
+          if (isa<cudaq::quake::WireType>(result.getType())) {
+            auto mapped = qubitMap.find(operand);
+            if (mapped == qubitMap.end())
+              return WalkResult::interrupt();
+            qubitMap[result] = mapped->second;
+          }
+      }
+    }
     if (auto optor = dyn_cast<cudaq::quake::OperatorInterface>(op)) {
       optor.getOperatorMatrix(matrix);
       // If the operator couldn't produce a matrix, stop the walk.
