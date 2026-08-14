@@ -535,8 +535,8 @@ public:
 
         OperationState res(op->getLoc(), op->getName().getStringRef(), operands,
                            op->getResultTypes(), attrs);
-        // FIXME: Quake quantum gates do have results.
-        builder.create(res);
+        Operation *replacement = builder.create(res);
+        op->replaceAllUsesWith(replacement->getResults());
         op->erase();
       } else if (auto apply = dyn_cast<cudaq::quake::ApplyOp>(op)) {
         // If op is an apply and in the set `controlNotNeeded`, then skip it.
