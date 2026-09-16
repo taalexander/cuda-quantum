@@ -23,6 +23,52 @@ namespace cudaq::opt {
 using namespace mlir;
 
 namespace {
+static LogicalResult controlsAreLinearizable(func::FuncOp func,
+                                             DominanceInfo &dom) {
+  auto result = func.walk([&](cudaq::quake::ToControlOp toCtrl) {
+    SmallVector<Operation *> users(toCtrl->getUsers().begin(),
+                                   toCtrl->getUsers().end());
+    if (users.size() <= 1)
+      return WalkResult::advance();
+
+    SmallVector<Operation *> restorations;
+    for (auto *user : users)
+      if (isa<cudaq::quake::FromControlOp>(user))
+        restorations.push_back(user);
+    if (restorations.size() != 1) {
+      toCtrl.emitOpError(
+          "cannot linearize a reusable control without one restoration");
+      return WalkResult::interrupt();
+    }
+
+    auto *restoration = restorations.front();
+    for (auto *user : users) {
+      if (user != restoration && !dom.dominates(user, restoration)) {
+        toCtrl.emitOpError(
+            "cannot linearize a reusable control across incomparable "
+            "control-flow paths");
+        return WalkResult::interrupt();
+      }
+    }
+    for (auto [index, lhs] : llvm::enumerate(users)) {
+      if (lhs == restoration)
+        continue;
+      for (auto *rhs : llvm::drop_begin(users, index + 1)) {
+        if (rhs == restoration)
+          continue;
+        if (!dom.dominates(lhs, rhs) && !dom.dominates(rhs, lhs)) {
+          toCtrl.emitOpError(
+              "cannot linearize a reusable control across incomparable "
+              "control-flow paths");
+          return WalkResult::interrupt();
+        }
+      }
+    }
+    return WalkResult::advance();
+  });
+  return success(!result.wasInterrupted());
+}
+
 class ThreadControl : public OpRewritePattern<cudaq::quake::ToControlOp> {
 public:
   explicit ThreadControl(MLIRContext *ctx, DominanceInfo &di)
@@ -146,6 +192,10 @@ public:
     auto *ctx = &getContext();
     auto func = getOperation();
     DominanceInfo domInfo(func);
+    if (failed(controlsAreLinearizable(func, domInfo))) {
+      signalPassFailure();
+      return;
+    }
     RewritePatternSet patterns(ctx);
     patterns.insert<ThreadControl>(ctx, domInfo);
     if (failed(

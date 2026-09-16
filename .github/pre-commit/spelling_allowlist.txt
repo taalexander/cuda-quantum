@@ -319,6 +319,8 @@ iteratively
 kets
 krylov
 libunwind
+linearize
+linearized
 linker
 linkers
 logarithmically
@@ -382,6 +384,7 @@ reStructuredText
 realtime
 reconfigurable
 recv
+representable
 reproducibility
 responder
 resultData

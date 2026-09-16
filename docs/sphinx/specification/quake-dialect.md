@@ -169,12 +169,8 @@ Value semantics applies when the individual qudits can be represented
 explicitly. Reference semantics remains useful for dynamically sized
 collections and runtime-selected elements. A transformation must account for
 the representation it accepts rather than assume that every program can be
-freely converted between the two forms.
-
-```{only} compiler_developer_docs
-See {ref}`Developing compiler passes <compiler-pass-input-output-ir>` for more
-detail.
-```
+freely converted between the two forms. See {doc}`CUDA-Q IR
+<../using/extending/compiler/cudaq_ir>` for more detail.
 
 ## Calling between reference and value forms
 

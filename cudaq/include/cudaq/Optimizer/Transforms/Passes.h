@@ -35,6 +35,11 @@ void registerClassicalOptimizationPipeline();
 void registerMappingPipeline();
 void registerToCFGPipeline();
 
+/// Convert representable quantum IR to Quake value semantics and linearize
+/// totally ordered reusable controls for downstream optimization and lowering.
+void addQuakeToOptimizerForm(mlir::OpPassManager &pm);
+void registerQuakeToOptimizerFormPipeline();
+
 /// This pipeline is run on every kernel decorator immediately after its
 /// definition has been processed by the Python bridge. It converts the
 /// `ModuleOp` to a target agnostic form which is amenable to further lowering,

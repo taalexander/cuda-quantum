@@ -53,6 +53,10 @@ createConvertToQIRFuncPass(llvm::StringRef convertTo);
 /// Register target pipelines.
 void registerTargetPipelines();
 
+/// Register the pipeline that prepares Quake and lowers it to a selected QIR
+/// API.
+void registerCodegenForQIRPipeline();
+
 /// Register CodeGenDialect with the provided DialectRegistry.
 void registerCodeGenDialect(mlir::DialectRegistry &registry);
 

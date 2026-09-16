@@ -26,9 +26,21 @@ struct TargetCodegenPipelineOptions
       *this, "convert-to", llvm::cl::desc("Conversion target specifier."),
       llvm::cl::init("")};
 };
+
+class InvalidQIRTargetPass
+    : public PassWrapper<InvalidQIRTargetPass, OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InvalidQIRTargetPass)
+
+  void runOnOperation() override {
+    getOperation().emitError(
+        "convert to QIR must be given a valid specification to use.");
+    signalPassFailure();
+  }
+};
 } // namespace
 
-static void addQIRConversionPipeline(PassManager &pm, StringRef convertTo) {
+static void addQIRConversionPipeline(OpPassManager &pm, StringRef convertTo) {
   auto convertFields = convertTo.split(':');
   if (convertFields.first == "qir" || convertFields.first == "qir-full") {
     cudaq::opt::addConvertToQIRAPIPipeline(pm, "full:" +
@@ -41,14 +53,13 @@ static void addQIRConversionPipeline(PassManager &pm, StringRef convertTo) {
     cudaq::opt::addConvertToQIRAPIPipeline(pm, "adaptive-profile:" +
                                                    convertFields.second.str());
   } else {
-    emitError(UnknownLoc::get(pm.getContext()),
-              "convert to QIR must be given a valid specification to use.");
+    pm.addPass(std::make_unique<InvalidQIRTargetPass>());
   }
 }
 
 template <bool isJIT>
 void createCommonTargetCodegenPipeline(
-    PassManager &pm, const TargetCodegenPipelineOptions &options) {
+    OpPassManager &pm, const TargetCodegenPipelineOptions &options) {
   if constexpr (isJIT) {
     pm.addNestedPass<func::FuncOp>(cudaq::opt::createExpandMeasurementsPass());
     pm.addNestedPass<func::FuncOp>(cudaq::opt::createClassicalMemToReg());
@@ -94,18 +105,13 @@ void createCommonTargetCodegenPipeline(
   pm.addNestedPass<func::FuncOp>(createCSEPass());
 }
 
-template <bool isJIT, bool useValueSemantics = false>
-void createTargetCodegenPipeline(PassManager &pm,
-                                 const TargetCodegenPipelineOptions &options) {
+template <bool isJIT>
+void createTargetCodegenPipeline(OpPassManager &pm,
+                                 const TargetCodegenPipelineOptions &options,
+                                 bool useValueSemantics = false) {
   createCommonTargetCodegenPipeline<isJIT>(pm, options);
   if (useValueSemantics) {
-    pm.addNestedPass<func::FuncOp>(
-        cudaq::opt::createFactorQuantumAllocations());
-    pm.addNestedPass<func::FuncOp>(cudaq::opt::createCableRoughIn());
-    pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
-    pm.addNestedPass<func::FuncOp>(cudaq::opt::createMemToReg());
-    pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
-    pm.addNestedPass<func::FuncOp>(cudaq::opt::createRepairLinearType());
+    cudaq::opt::addQuakeToOptimizerForm(pm);
     pm.addNestedPass<func::FuncOp>(cudaq::opt::createQuakeSimplify());
     pm.addNestedPass<func::FuncOp>(cudaq::opt::createDeadQuantumElimination());
   }
@@ -123,12 +129,41 @@ void createTargetCodegenPipeline(PassManager &pm,
 }
 
 template <bool isJIT>
-void createTargetCodegenPipeline(PassManager &pm, StringRef convertTo) {
+void createTargetCodegenPipeline(OpPassManager &pm, StringRef convertTo) {
   auto convertFields = convertTo.split(':');
   TargetCodegenPipelineOptions opts;
   opts.allowBreaksInLoops = convertFields.first == "qir-adaptive";
   opts.target = convertTo.str();
   createTargetCodegenPipeline<isJIT>(pm, opts);
+}
+
+namespace {
+struct CodegenForQIRPipelineOptions
+    : public PassPipelineOptions<CodegenForQIRPipelineOptions> {
+  PassOptions::Option<std::string> convertTo{
+      *this, "convert-to",
+      llvm::cl::desc("Option to specify the QIR profile to convert to."),
+      llvm::cl::init("qir")};
+  PassOptions::Option<bool> useValueSemantics{
+      *this, "value-semantics",
+      llvm::cl::desc(
+          "Lower to value semantics to enable quantum optimizations."),
+      llvm::cl::init(false)};
+};
+} // namespace
+
+void cudaq::opt::registerCodegenForQIRPipeline() {
+  PassPipelineRegistration<CodegenForQIRPipelineOptions>(
+      "codegen-for-qir", "Convert Quake to one of the QIR APIs.",
+      [](OpPassManager &pm, const CodegenForQIRPipelineOptions &options) {
+        TargetCodegenPipelineOptions targetOptions;
+        auto convertTo = StringRef(options.convertTo);
+        targetOptions.allowBreaksInLoops =
+            convertTo.split(':').first == "qir-adaptive";
+        targetOptions.target = options.convertTo;
+        ::createTargetCodegenPipeline</*isJIT=*/false>(
+            pm, targetOptions, options.useValueSemantics);
+      });
 }
 
 void cudaq::opt::addJITPipelineConvertToQIR(PassManager &pm,

@@ -33,6 +33,8 @@ public:
     // so we must track a new list of controls and reconstruct the operands
     // instead of replacing the controls in place.
     SmallVector<Value> newControls;
+    SmallVector<bool> newNegations;
+    auto negations = op.getNegatedQubitControls();
     bool update = false;
 
     // Search through the controls for veqs with known sizes
@@ -56,10 +58,14 @@ public:
           auto ext = cudaq::quake::ExtractRefOp::create(rewriter, op.getLoc(),
                                                         veqVal, i);
           newControls.push_back(ext);
+          if (negations)
+            newNegations.push_back((*negations)[index]);
           update = true;
         }
       } else {
         newControls.push_back(control);
+        if (negations)
+          newNegations.push_back((*negations)[index]);
       }
     }
 
@@ -74,7 +80,8 @@ public:
 
     auto newOp = rewriter.replaceOpWithNewOp<OP>(
         op, op.getIsAdj(), op.getParameters(), newControls, op.getTargets(),
-        op.getNegatedQubitControlsAttr());
+        negations ? rewriter.getDenseBoolArrayAttr(newNegations)
+                  : DenseBoolArrayAttr{});
 
     newOp->setAttr("operand_segment_sizes", segmentSizes);
 
