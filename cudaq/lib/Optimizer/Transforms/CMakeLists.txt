@@ -68,6 +68,7 @@ add_cudaq_library(OptTransforms
   NormalizeAtomicQuantumRegions.cpp
   NormalizePhasePlacement.cpp
   ObserveAnsatz.cpp
+  OptimizeSingleQubitChains.cpp
   OptimizeSingleQubitCliffordT.cpp
   PhaseFolding.cpp
   Pipelines.cpp
