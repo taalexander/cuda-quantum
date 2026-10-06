@@ -1,0 +1,31 @@
+// ========================================================================== //
+// Copyright (c) 2026 NVIDIA Corporation & Affiliates.                        //
+// All rights reserved.                                                       //
+//                                                                            //
+// This source code and the accompanying materials are made available under   //
+// the terms of the Apache License 2.0 which accompanies this distribution.   //
+// ========================================================================== //
+
+// RUN: cudaq-opt --pass-pipeline='builtin.module(decomposition{enable-patterns=U3ToRotations},convert-to-linear-values,func.func(optimize-1q-rotations-for-clifford-t{epsilon=1e-10},canonicalize))' %s | FileCheck %s
+
+// A non-constant parameter ends a chain. The constant U3 on each side is
+// optimized separately, and the dynamic rotation is untouched.
+func.func @dynamic(%target: !quake.ref, %dynamic: f64) {
+  %theta = arith.constant 2.124031875205279 : f64
+  %phi = arith.constant -3.040881076066917 : f64
+  %lambda = arith.constant 1.7607970180361683 : f64
+  quake.u3 (%theta, %phi, %lambda) %target : (f64, f64, f64, !quake.ref) -> ()
+  quake.rz (%dynamic) %target : (f64, !quake.ref) -> ()
+  quake.u3 (%theta, %phi, %lambda) %target : (f64, f64, f64, !quake.ref) -> ()
+  return
+}
+// CHECK-LABEL: func.func @dynamic(
+// CHECK: quake.rx
+// CHECK-NEXT: quake.rz
+// CHECK-NEXT: quake.rx
+// CHECK-NEXT: quake.phase
+// CHECK: quake.rz (%arg1)
+// CHECK-NEXT: quake.rx
+// CHECK-NEXT: quake.rz
+// CHECK-NEXT: quake.rx
+// CHECK-NEXT: quake.phase
