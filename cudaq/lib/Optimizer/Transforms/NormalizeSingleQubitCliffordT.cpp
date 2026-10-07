@@ -27,7 +27,7 @@
 #include <utility>
 
 namespace cudaq::opt {
-#define GEN_PASS_DEF_OPTIMIZESINGLEQUBITCLIFFORDT
+#define GEN_PASS_DEF_NORMALIZESINGLEQUBITCLIFFORDT
 #include "cudaq/Optimizer/Transforms/Passes.h.inc"
 } // namespace cudaq::opt
 
@@ -72,11 +72,11 @@ struct CircuitCost {
   auto operator<=>(const CircuitCost &) const = default;
 };
 
-class OptimizeSingleQubitCliffordTPass
-    : public cudaq::opt::impl::OptimizeSingleQubitCliffordTBase<
-          OptimizeSingleQubitCliffordTPass> {
+class NormalizeSingleQubitCliffordTPass
+    : public cudaq::opt::impl::NormalizeSingleQubitCliffordTBase<
+          NormalizeSingleQubitCliffordTPass> {
 public:
-  using OptimizeSingleQubitCliffordTBase::OptimizeSingleQubitCliffordTBase;
+  using NormalizeSingleQubitCliffordTBase::NormalizeSingleQubitCliffordTBase;
   void runOnOperation() override;
 };
 
@@ -436,7 +436,7 @@ static void optimizeRegion(Region &region) {
   }
 }
 
-void OptimizeSingleQubitCliffordTPass::runOnOperation() {
+void NormalizeSingleQubitCliffordTPass::runOnOperation() {
   ModuleOp module = getOperation();
   for (func::FuncOp function : module.getOps<func::FuncOp>())
     optimizeRegion(function.getBody());
