@@ -41,6 +41,14 @@ std::string repr(const T &value) {
   return nb::repr(nb::cast(value)).c_str();
 }
 
+/// The cost model as Python reads it back, such as `CostModel.t_count`.
+std::string costModelRepr(const std::optional<CostModel> &costModel) {
+  if (!costModel)
+    return "None";
+  return "CostModel." +
+         std::string(nb::str(nb::cast(*costModel).attr("name")).c_str());
+}
+
 template <typename T>
 nb::class_<T> valueClass(nb::module_ &m, const char *name) {
   return nb::class_<T>(m, name)
@@ -114,7 +122,7 @@ void cudaq::bindTargetProfiles(nb::module_ &m) {
       .def("__repr__", [](const QuakeUnmappedProfile &p) {
         return "QuakeUnmappedProfile(basis_gates=" + repr(p.basisGates) +
                ", approximation_tolerance=" + repr(p.approximationTolerance) +
-               ", cost_model=" + repr(p.costModel) + ")";
+               ", cost_model=" + costModelRepr(p.costModel) + ")";
       });
   valueClass<CustomPipelineLowering>(m, "CustomPipelineLowering")
       .def(
